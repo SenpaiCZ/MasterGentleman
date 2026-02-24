@@ -30,6 +30,16 @@ async def init_db():
                 FOREIGN KEY (listing_b_id) REFERENCES listings (id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                friend_code TEXT,
+                team TEXT,
+                region TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
 
 async def add_listing(user_id, listing_type, pokemon_id, is_shiny=False, is_purified=False, details=None):
@@ -124,6 +134,25 @@ async def check_trade_history(listing_a_id, listing_b_id):
             OR (listing_a_id = ? AND listing_b_id = ?)
         """
         async with db.execute(sql, (listing_a_id, listing_b_id, listing_b_id, listing_a_id)) as cursor:
+            return await cursor.fetchone()
+
+async def upsert_user(user_id, friend_code, team, region):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("""
+            INSERT INTO users (user_id, friend_code, team, region, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET
+                friend_code=excluded.friend_code,
+                team=excluded.team,
+                region=excluded.region,
+                updated_at=CURRENT_TIMESTAMP
+        """, (user_id, friend_code, team, region))
+        await db.commit()
+
+async def get_user(user_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
             return await cursor.fetchone()
 
 # For debugging/verification
