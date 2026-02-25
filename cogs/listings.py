@@ -4,6 +4,7 @@ from discord import app_commands, ui
 import database
 import services.matcher as matcher
 import views.trade
+from views.listing import ListingDraftView
 import logging
 from data.pokemon import POKEMON_NAMES, POKEMON_IDS
 
@@ -33,39 +34,6 @@ class ListingConfirmationView(ui.View):
     @ui.button(label="📋 Zkopírovat můj FC", style=discord.ButtonStyle.secondary)
     async def copy_fc(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.send_message(f"{self.friend_code}", ephemeral=True)
-
-class AccountSelect(ui.Select):
-    def __init__(self, accounts, listing_type, pokemon_id, pokemon_name, is_shiny, is_purified, details):
-        self.listing_type = listing_type
-        self.pokemon_id = pokemon_id
-        self.pokemon_name = pokemon_name
-        self.is_shiny = is_shiny
-        self.is_purified = is_purified
-        self.details = details
-
-        options = []
-        for acc in accounts:
-            label = f"{acc['account_name']} ({acc['friend_code']})"
-            if acc['is_main']:
-                label = "⭐ " + label
-            options.append(discord.SelectOption(label=label, value=str(acc['id'])))
-
-        super().__init__(placeholder="Vyberte účet pro tuto nabídku", min_values=1, max_values=1, options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        account_id = int(self.values[0])
-
-        # Call the logic to actually create listing
-        cog = interaction.client.get_cog("Listings")
-        if cog:
-            # We defer update to avoid "interaction failed" and allow followups
-            await interaction.response.edit_message(content=f"Vybrán účet. Vytvářím záznam...", view=None)
-            await cog.create_listing_final(interaction, account_id, self.listing_type, self.pokemon_id, self.pokemon_name, self.is_shiny, self.is_purified, self.details)
-
-class AccountSelectView(ui.View):
-    def __init__(self, accounts, listing_type, pokemon_id, pokemon_name, is_shiny, is_purified, details):
-        super().__init__()
-        self.add_item(AccountSelect(accounts, listing_type, pokemon_id, pokemon_name, is_shiny, is_purified, details))
 
 class Listings(commands.Cog):
     def __init__(self, bot):
@@ -198,10 +166,14 @@ class Listings(commands.Cog):
 
             view = ListingConfirmationView(friend_code)
 
-            if interaction.response.is_done():
-                 await interaction.followup.send(msg, view=view, ephemeral=False)
+            # Notify the user via ephemeral followup that it's done
+            await interaction.followup.send("✅ Záznam byl úspěšně zveřejněn do kanálu.", ephemeral=True)
+
+            # Send the PUBLIC message to the channel so others can see it
+            if interaction.channel:
+                await interaction.channel.send(msg, view=view)
             else:
-                 await interaction.response.send_message(msg, view=view, ephemeral=False)
+                logger.warning(f"Could not send public message for listing {listing_id} - no channel.")
 
             logger.info(f"User {interaction.user.id} added listing {listing_type} {pokemon_name} (#{pokemon_id}) for account {account_id} (ID: {listing_id})")
 
@@ -218,7 +190,7 @@ class Listings(commands.Cog):
             else:
                 await interaction.followup.send("❌ Nastala chyba při vytváření záznamu.", ephemeral=True)
 
-    async def _handle_listing_creation(self, interaction: discord.Interaction, listing_type: str, pokemon_name: str, shiny: bool, purified: bool, popis: str):
+    async def _handle_listing_creation(self, interaction: discord.Interaction, listing_type: str, pokemon_name: str, popis: str):
         # Resolve Pokemon ID
         pokemon_id = POKEMON_NAMES.get(pokemon_name.title())
         if not pokemon_id:
@@ -243,37 +215,38 @@ class Listings(commands.Cog):
             await interaction.response.send_message("❌ Nemáte registrovaný žádný účet. Použijte `/registrace`.", ephemeral=True)
             return
 
-        if len(accounts) == 1:
-            # Auto-select the only account
-            await self.create_listing_final(interaction, accounts[0]['id'], listing_type, pokemon_id, pokemon_name, shiny, purified, popis)
-        else:
-            # Ask user to select account
-            view = AccountSelectView(accounts, listing_type, pokemon_id, pokemon_name, shiny, purified, popis)
-            await interaction.response.send_message("Vyberte účet, pro který chcete tuto nabídku vytvořit:", view=view, ephemeral=True)
+        view = ListingDraftView(
+            interaction,
+            listing_type,
+            pokemon_id,
+            pokemon_name,
+            accounts,
+            initial_details=popis,
+            submit_callback=self.create_listing_final
+        )
+
+        embed = view._get_embed()
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(name="nabidka", description="Nabídni Pokémona k výměně (Offer a Pokemon)")
     @app_commands.describe(
         pokemon="Jméno Pokémona (začněte psát pro našeptávač)",
-        shiny="Je shiny? (Is it shiny?)",
-        purified="Je purified? (Is it purified?)",
         popis="Další detaily (kostým, útoky, atd.) - volitelné"
     )
     @app_commands.autocomplete(pokemon=pokemon_autocomplete)
-    async def nabidka(self, interaction: discord.Interaction, pokemon: str, shiny: bool = False, purified: bool = False, popis: str = None):
+    async def nabidka(self, interaction: discord.Interaction, pokemon: str, popis: str = None):
         """Vytvoří novou nabídku (HAVE)."""
-        await self._handle_listing_creation(interaction, 'HAVE', pokemon, shiny, purified, popis)
+        await self._handle_listing_creation(interaction, 'HAVE', pokemon, popis)
 
     @app_commands.command(name="poptavka", description="Hledám Pokémona (Request a Pokemon)")
     @app_commands.describe(
         pokemon="Jméno Pokémona (začněte psát pro našeptávač)",
-        shiny="Je shiny? (Is it shiny?)",
-        purified="Je purified? (Is it purified?)",
         popis="Další detaily (kostým, útoky, atd.) - volitelné"
     )
     @app_commands.autocomplete(pokemon=pokemon_autocomplete)
-    async def poptavka(self, interaction: discord.Interaction, pokemon: str, shiny: bool = False, purified: bool = False, popis: str = None):
+    async def poptavka(self, interaction: discord.Interaction, pokemon: str, popis: str = None):
         """Vytvoří novou poptávku (WANT)."""
-        await self._handle_listing_creation(interaction, 'WANT', pokemon, shiny, purified, popis)
+        await self._handle_listing_creation(interaction, 'WANT', pokemon, popis)
 
     @app_commands.command(name="seznam", description="Zobrazit mé aktivní nabídky a poptávky")
     async def seznam(self, interaction: discord.Interaction):
