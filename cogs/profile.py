@@ -3,6 +3,8 @@ from discord.ext import commands
 from discord import app_commands, ui
 import database
 import logging
+import qrcode
+from io import BytesIO
 
 logger = logging.getLogger('discord')
 
@@ -13,60 +15,84 @@ TEAMS = {
 }
 
 class ProfileView(ui.View):
-    def __init__(self, friend_code):
+    def __init__(self, accounts):
         super().__init__(timeout=None)
-        self.friend_code = friend_code
+        # Add buttons for each account (limit to 5 due to Discord button limit per row, max 25 total)
+        # We'll just show buttons for first 5 accounts.
+        for i, acc in enumerate(accounts[:5]):
+            label = f"Kopírovat {acc['account_name']}"
+            if acc['is_main']:
+                label = f"📋 {acc['account_name']} (Main)"
+            else:
+                label = f"📋 {acc['account_name']}"
 
-    @discord.ui.button(label="📱 Zkopírovat Friend Code", style=discord.ButtonStyle.primary, emoji="📋")
-    async def copy_code(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Reply with just the code, hidden (ephemeral) so user can copy it easily on mobile
-        await interaction.response.send_message(f"{self.friend_code}", ephemeral=True)
+            button = discord.ui.Button(label=label, style=discord.ButtonStyle.primary, custom_id=f"copy_fc_{acc['id']}")
+            button.callback = self.create_callback(acc['friend_code'])
+            self.add_item(button)
+
+    def create_callback(self, code):
+        async def callback(interaction: discord.Interaction):
+            await interaction.response.send_message(f"{code}", ephemeral=True)
+        return callback
 
 class Profile(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.ctx_menu = app_commands.ContextMenu(
+        self.ctx_menu_profile = app_commands.ContextMenu(
             name="Zobrazit profil",
             callback=self.show_profile_context
         )
-        self.bot.tree.add_command(self.ctx_menu)
+        self.ctx_menu_qr = app_commands.ContextMenu(
+            name="Generovat QR kódy",
+            callback=self.generate_qr_context
+        )
+        self.bot.tree.add_command(self.ctx_menu_profile)
+        self.bot.tree.add_command(self.ctx_menu_qr)
 
     async def cog_unload(self):
-        self.bot.tree.remove_command(self.ctx_menu.name, type=self.ctx_menu.type)
+        self.bot.tree.remove_command(self.ctx_menu_profile.name, type=self.ctx_menu_profile.type)
+        self.bot.tree.remove_command(self.ctx_menu_qr.name, type=self.ctx_menu_qr.type)
 
     async def _show_profile(self, interaction: discord.Interaction, user: discord.Member):
         try:
-            db_user = await database.get_user(user.id)
+            accounts = await database.get_user_accounts(user.id)
 
-            if not db_user:
+            if not accounts:
                 await interaction.response.send_message(
-                    f"❌ Uživatel {user.display_name} není registrován.",
+                    f"❌ Uživatel {user.display_name} nemá registrovaný žádný účet.",
                     ephemeral=True
                 )
                 return
 
-            # Prepare data
-            friend_code = db_user['friend_code']
-            team = db_user['team']
-            region = db_user['region']
+            # Find Main account for embed color
+            main_account = next((acc for acc in accounts if acc['is_main']), accounts[0])
+            team_color = TEAMS.get(main_account['team'], discord.Color.default())
 
-            # Format Friend Code for display (#### #### ####)
-            formatted_fc = f"{friend_code[:4]} {friend_code[4:8]} {friend_code[8:]}"
-
-            # Embed
-            color = TEAMS.get(team, discord.Color.default())
-            embed = discord.Embed(title=f"Profil trenéra {user.display_name}", color=color)
+            embed = discord.Embed(title=f"Profil trenéra {user.display_name}", color=team_color)
             embed.set_thumbnail(url=user.display_avatar.url)
 
-            embed.add_field(name="🛡️ Tým", value=team, inline=True)
-            embed.add_field(name="📍 Region", value=region, inline=True)
-            embed.add_field(name="🆔 Friend Code", value=f"`{formatted_fc}`", inline=False)
+            for acc in accounts:
+                name = acc['account_name']
+                is_main = "⭐ " if acc['is_main'] else ""
+                fc = f"{acc['friend_code'][:4]} {acc['friend_code'][4:8]} {acc['friend_code'][8:]}"
+
+                team_emoji = ""
+                if acc['team'] == "Mystic": team_emoji = "💙"
+                elif acc['team'] == "Valor": team_emoji = "❤️"
+                elif acc['team'] == "Instinct": team_emoji = "💛"
+
+                value = (
+                    f"**FC:** `{fc}`\n"
+                    f"**Tým:** {team_emoji} {acc['team']}\n"
+                    f"**Region:** 📍 {acc['region']}"
+                )
+                embed.add_field(name=f"{is_main}{name}", value=value, inline=False)
 
             embed.set_footer(text="Pro zkopírování kódu stiskni tlačítko níže.")
 
             await interaction.response.send_message(
                 embed=embed,
-                view=ProfileView(friend_code),
+                view=ProfileView(accounts),
                 ephemeral=False
             )
 
@@ -83,6 +109,52 @@ class Profile(commands.Cog):
 
     async def show_profile_context(self, interaction: discord.Interaction, member: discord.Member):
         await self._show_profile(interaction, member)
+
+    async def generate_qr_context(self, interaction: discord.Interaction, member: discord.Member):
+        """Generuje QR kódy pro friend codes uživatele."""
+        await interaction.response.defer(ephemeral=False)
+
+        try:
+            accounts = await database.get_user_accounts(member.id)
+            if not accounts:
+                await interaction.followup.send(f"❌ Uživatel {member.display_name} nemá žádný registrovaný účet.", ephemeral=True)
+                return
+
+            files = []
+            embed = discord.Embed(title=f"QR Kódy: {member.display_name}", color=discord.Color.blue())
+
+            for acc in accounts:
+                fc = acc['friend_code']
+                name = acc['account_name']
+                is_main = "⭐ " if acc['is_main'] else ""
+
+                # Generate QR
+                qr = qrcode.QRCode(
+                    version=1,
+                    error_correction=qrcode.constants.ERROR_CORRECT_L,
+                    box_size=10,
+                    border=4,
+                )
+                qr.add_data(fc)
+                qr.make(fit=True)
+                img = qr.make_image(fill_color="black", back_color="white")
+
+                # Save to buffer
+                buffer = BytesIO()
+                img.save(buffer, format="PNG")
+                buffer.seek(0)
+
+                filename = f"qr_{name}_{fc}.png".replace(" ", "_")
+                file = discord.File(buffer, filename=filename)
+                files.append(file)
+
+                embed.add_field(name=f"{is_main}{name}", value=f"FC: `{fc}`", inline=False)
+
+            await interaction.followup.send(embed=embed, files=files)
+
+        except Exception as e:
+            logger.error(f"Error generating QR codes for {member.id}: {e}")
+            await interaction.followup.send("❌ Nastala chyba při generování QR kódů.", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Profile(bot))

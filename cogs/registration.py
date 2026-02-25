@@ -29,47 +29,97 @@ REGIONS = [
     "Zlínský kraj"
 ]
 
-class RegionSelect(ui.Select):
-    def __init__(self, friend_code, team):
+async def save_user_registration(interaction, friend_code, team, region, account_name, is_main):
+    """Helper to save user and update roles."""
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        await database.add_user_account(
+            interaction.user.id,
+            friend_code,
+            team,
+            region,
+            account_name,
+            is_main
+        )
+    except Exception as e:
+        logger.error(f"Error saving user registration: {e}")
+        await interaction.followup.send("❌ Nastala chyba při ukládání registrace.", ephemeral=True)
+        return
+
+    # Update roles (only if it's the main account or first account? Or always?)
+    # Usually we want roles to reflect the user's presence.
+    # If they add an Alt with different Team, do we add that role too?
+    # Let's assume we just add the roles.
+    cog = interaction.client.get_cog("Registration")
+    if cog:
+        await cog.update_user_roles(interaction.guild, interaction.user, team, region)
+
+    type_str = "Hlavní" if is_main else "Vedlejší"
+    await interaction.followup.send(
+        f"✅ **Účet přidán!**\n\n"
+        f"🏷️ **Název:** {account_name} ({type_str})\n"
+        f"👤 **Friend Code:** {friend_code}\n"
+        f"🛡️ **Tým:** {team}\n"
+        f"📍 **Region:** {region}\n\n"
+        f"💡 *Tip: Použijte `/nabidka` pro přidání Pokémonů pro tento účet.*",
+        ephemeral=True
+    )
+
+class AccountTypeSelect(ui.Select):
+    def __init__(self, friend_code, team, region, account_name):
         self.friend_code = friend_code
         self.team = team
+        self.region = region
+        self.account_name = account_name
+        options = [
+            discord.SelectOption(label="Hlavní účet (Main)", value="True", description="Toto bude můj hlavní účet"),
+            discord.SelectOption(label="Vedlejší účet (Alt)", value="False", description="Toto je vedlejší účet")
+        ]
+        super().__init__(placeholder="Je toto hlavní účet?", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        is_main = self.values[0] == "True"
+        await save_user_registration(interaction, self.friend_code, self.team, self.region, self.account_name, is_main)
+
+class AccountTypeView(ui.View):
+    def __init__(self, friend_code, team, region, account_name):
+        super().__init__()
+        self.add_item(AccountTypeSelect(friend_code, team, region, account_name))
+
+class RegionSelect(ui.Select):
+    def __init__(self, friend_code, team, account_name, mode):
+        self.friend_code = friend_code
+        self.team = team
+        self.account_name = account_name
+        self.mode = mode
         options = [discord.SelectOption(label=region) for region in REGIONS]
         super().__init__(placeholder="Vyberte region (Select Region)", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         region = self.values[0]
-        await interaction.response.defer(ephemeral=True)
 
-        # Save to database
-        try:
-            await database.upsert_user(interaction.user.id, self.friend_code, self.team, region)
-        except Exception as e:
-            logger.error(f"Error saving user registration: {e}")
-            await interaction.followup.send("❌ Nastala chyba při ukládání registrace.", ephemeral=True)
-            return
-
-        # Update roles
-        cog = interaction.client.get_cog("Registration")
-        if cog:
-            await cog.update_user_roles(interaction.guild, interaction.user, self.team, region)
-
-        await interaction.followup.send(
-            f"✅ **Registrace dokončena!**\n\n"
-            f"👤 **Friend Code:** {self.friend_code}\n"
-            f"🛡️ **Tým:** {self.team}\n"
-            f"📍 **Region:** {region}\n\n"
-            f"💡 *Tip: Použijte `/profil` pro zobrazení karty trenéra nebo `/nabidka` pro přidání Pokémonů.*",
-            ephemeral=True
-        )
+        if self.mode == "REGISTER":
+            # Direct save as Main
+            await save_user_registration(interaction, self.friend_code, self.team, region, self.account_name, True)
+        else:
+            # ADD_ACCOUNT: Ask for Main/Alt
+            await interaction.response.send_message(
+                f"Vybrán region: **{region}**. Je tento účet hlavní nebo vedlejší?",
+                view=AccountTypeView(self.friend_code, self.team, region, self.account_name),
+                ephemeral=True
+            )
 
 class RegionSelectView(ui.View):
-    def __init__(self, friend_code, team):
+    def __init__(self, friend_code, team, account_name, mode):
         super().__init__()
-        self.add_item(RegionSelect(friend_code, team))
+        self.add_item(RegionSelect(friend_code, team, account_name, mode))
 
 class TeamSelect(ui.Select):
-    def __init__(self, friend_code):
+    def __init__(self, friend_code, account_name, mode):
         self.friend_code = friend_code
+        self.account_name = account_name
+        self.mode = mode
         options = [
             discord.SelectOption(label="Mystic (Blue)", value="Mystic", emoji="💙"),
             discord.SelectOption(label="Valor (Red)", value="Valor", emoji="❤️"),
@@ -81,21 +131,21 @@ class TeamSelect(ui.Select):
         team = self.values[0]
         await interaction.response.send_message(
             f"Vybrán tým: **{team}**. Nyní vyberte region.",
-            view=RegionSelectView(self.friend_code, team),
+            view=RegionSelectView(self.friend_code, team, self.account_name, self.mode),
             ephemeral=True
         )
 
 class TeamSelectView(ui.View):
-    def __init__(self, friend_code):
+    def __init__(self, friend_code, account_name, mode):
         super().__init__()
-        self.add_item(TeamSelect(friend_code))
+        self.add_item(TeamSelect(friend_code, account_name, mode))
 
 class RegistrationModal(ui.Modal, title="Registrace Trenéra"):
     friend_code = ui.TextInput(
         label="Friend Code (12 číslic)",
         placeholder="1234 5678 9012",
         min_length=12,
-        max_length=15 # Allow spaces
+        max_length=15
     )
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -107,7 +157,39 @@ class RegistrationModal(ui.Modal, title="Registrace Trenéra"):
 
         await interaction.response.send_message(
             f"Friend Code **{code}** přijat. Nyní vyberte svůj tým.",
-            view=TeamSelectView(code),
+            view=TeamSelectView(code, "Main", "REGISTER"),
+            ephemeral=True
+        )
+
+class AddAccountModal(ui.Modal, title="Přidat další účet"):
+    friend_code = ui.TextInput(
+        label="Friend Code (12 číslic)",
+        placeholder="1234 5678 9012",
+        min_length=12,
+        max_length=15
+    )
+    account_name = ui.TextInput(
+        label="Název účtu (např. Alt 1)",
+        placeholder="Alt 1",
+        min_length=1,
+        max_length=20,
+        default="Alt"
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        code = self.friend_code.value.replace(" ", "")
+        name = self.account_name.value.strip()
+
+        if not code.isdigit() or len(code) != 12:
+            await interaction.response.send_message("❌ Friend Code musí obsahovat přesně 12 číslic.", ephemeral=True)
+            return
+
+        if not name:
+            name = "Alt"
+
+        await interaction.response.send_message(
+            f"Účet **{name}** (FC: {code}) připraven. Vyberte tým.",
+            view=TeamSelectView(code, name, "ADD_ACCOUNT"),
             ephemeral=True
         )
 
@@ -138,19 +220,12 @@ class Registration(commands.Cog):
             logger.warning("Could not assign roles due to missing permissions or errors.")
             return
 
-        # 2. Identify old roles to remove
-        roles_to_remove = []
-        for role in member.roles:
-            if role.name in TEAMS and role.name != new_team:
-                roles_to_remove.append(role)
-            if role.name in REGIONS and role.name != new_region:
-                roles_to_remove.append(role)
+        # 2. Add roles (we don't remove old ones anymore to support mixed roles, or maybe we should?)
+        # If user has Main Mystic and Alt Valor, having both roles might be confusing.
+        # But usually Discord roles denote 'identity'.
+        # Let's just ADD.
 
-        # 3. Apply changes
         try:
-            if roles_to_remove:
-                await member.remove_roles(*roles_to_remove, reason="Registration Update")
-
             roles_to_add = []
             if team_role not in member.roles:
                 roles_to_add.append(team_role)
@@ -164,10 +239,33 @@ class Registration(commands.Cog):
         except discord.Forbidden:
             logger.error(f"Missing permissions to manage roles for {member.display_name}")
 
-    @app_commands.command(name="registrace", description="Zaregistrujte se (Friend Code, Tým, Region)")
+    @app_commands.command(name="registrace", description="Zaregistrujte svůj první (hlavní) účet")
     async def registrace(self, interaction: discord.Interaction):
-        """Spustí registrační proces."""
+        """Spustí registrační proces pro nový účet."""
+        # Check if user already exists
+        accounts = await database.get_user_accounts(interaction.user.id)
+        if accounts:
+            await interaction.response.send_message(
+                "❌ Už máte registrovaný účet. Pokud chcete přidat další, použijte příkaz `/pridat_ucet`.",
+                ephemeral=True
+            )
+            return
+
         await interaction.response.send_modal(RegistrationModal())
+
+    @app_commands.command(name="pridat_ucet", description="Přidat další herní účet (multi-account)")
+    async def pridat_ucet(self, interaction: discord.Interaction):
+        """Přidá další účet pro uživatele."""
+        # Check if user registered first
+        accounts = await database.get_user_accounts(interaction.user.id)
+        if not accounts:
+            await interaction.response.send_message(
+                "❌ Nemáte žádný účet. Nejprve použijte `/registrace`.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.send_modal(AddAccountModal())
 
 async def setup(bot):
     await bot.add_cog(Registration(bot))

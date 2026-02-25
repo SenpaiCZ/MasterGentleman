@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
+from discord import app_commands, ui
 import database
 import services.matcher as matcher
 import views.trade
@@ -8,6 +8,39 @@ import logging
 from data.pokemon import POKEMON_NAMES, POKEMON_IDS
 
 logger = logging.getLogger('discord')
+
+class AccountSelect(ui.Select):
+    def __init__(self, accounts, listing_type, pokemon_id, pokemon_name, is_shiny, is_purified, details):
+        self.listing_type = listing_type
+        self.pokemon_id = pokemon_id
+        self.pokemon_name = pokemon_name
+        self.is_shiny = is_shiny
+        self.is_purified = is_purified
+        self.details = details
+
+        options = []
+        for acc in accounts:
+            label = f"{acc['account_name']} ({acc['friend_code']})"
+            if acc['is_main']:
+                label = "⭐ " + label
+            options.append(discord.SelectOption(label=label, value=str(acc['id'])))
+
+        super().__init__(placeholder="Vyberte účet pro tuto nabídku", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        account_id = int(self.values[0])
+
+        # Call the logic to actually create listing
+        cog = interaction.client.get_cog("Listings")
+        if cog:
+            # We defer update to avoid "interaction failed" and allow followups
+            await interaction.response.edit_message(content=f"Vybrán účet. Vytvářím záznam...", view=None)
+            await cog.create_listing_final(interaction, account_id, self.listing_type, self.pokemon_id, self.pokemon_name, self.is_shiny, self.is_purified, self.details)
+
+class AccountSelectView(ui.View):
+    def __init__(self, accounts, listing_type, pokemon_id, pokemon_name, is_shiny, is_purified, details):
+        super().__init__()
+        self.add_item(AccountSelect(accounts, listing_type, pokemon_id, pokemon_name, is_shiny, is_purified, details))
 
 class Listings(commands.Cog):
     def __init__(self, bot):
@@ -17,17 +50,12 @@ class Listings(commands.Cog):
         current = current.lower()
         choices = []
         # Prioritize starts with, then contains
-        # Since the list is 1000+, we need to be efficient.
-        # But for < 2000 items, simple loop is fine.
-
-        # 1. Starts with
         for name in POKEMON_NAMES.keys():
             if name.lower().startswith(current):
                 choices.append(app_commands.Choice(name=name, value=name))
                 if len(choices) >= 25:
                     return choices
 
-        # 2. Contains (if we have space)
         if len(choices) < 25:
             for name in POKEMON_NAMES.keys():
                 if current in name.lower() and name not in [c.value for c in choices]:
@@ -40,7 +68,7 @@ class Listings(commands.Cog):
     async def _create_trade_channel(self, guild: discord.Guild, trade_id: int, listing_a_id: int, listing_b: dict):
         """Creates a private trade channel and notifies users."""
         try:
-            # Get listing details
+            # Get listing details (now includes account info)
             listing_a = await database.get_listing(listing_a_id)
             # listing_b is already fetched as dict (Row)
 
@@ -79,8 +107,12 @@ class Listings(commands.Cog):
             desc_a = f"{name_a} {'✨' if listing_a['is_shiny'] else ''} {'🕊️' if listing_a['is_purified'] else ''} {listing_a['details'] or ''}"
             desc_b = f"{name_b} {'✨' if listing_b['is_shiny'] else ''} {'🕊️' if listing_b['is_purified'] else ''} {listing_b['details'] or ''}"
 
-            embed.add_field(name=f"Uživatel A ({user_a.display_name if user_a else 'Unknown'})", value=f"{listing_a['listing_type']}: {desc_a}", inline=False)
-            embed.add_field(name=f"Uživatel B ({user_b.display_name if user_b else 'Unknown'})", value=f"{listing_b['listing_type']}: {desc_b}", inline=False)
+            # Add Account info
+            acc_a = f"{listing_a['account_name']} (FC: {listing_a['friend_code']})"
+            acc_b = f"{listing_b['account_name']} (FC: {listing_b['friend_code']})"
+
+            embed.add_field(name=f"Uživatel A ({user_a.display_name if user_a else 'Unknown'})", value=f"**Účet:** {acc_a}\n{listing_a['listing_type']}: {desc_a}", inline=False)
+            embed.add_field(name=f"Uživatel B ({user_b.display_name if user_b else 'Unknown'})", value=f"**Účet:** {acc_b}\n{listing_b['listing_type']}: {desc_b}", inline=False)
 
             embed.set_footer(text="Dohodněte se na výměně zde. Až bude hotovo, stiskněte 'Obchod Dokončen'.")
 
@@ -95,29 +127,11 @@ class Listings(commands.Cog):
         except Exception as e:
             logger.error(f"Error creating trade channel: {e}")
 
-    async def _handle_listing_creation(self, interaction: discord.Interaction, listing_type: str, pokemon_name: str, shiny: bool, purified: bool, popis: str):
-        # Resolve Pokemon ID
-        pokemon_id = POKEMON_NAMES.get(pokemon_name.title()) # Attempt to normalize input if user typed manually
-        if not pokemon_id:
-             # Try case insensitive search if direct lookup failed
-            for name, pid in POKEMON_NAMES.items():
-                if name.lower() == pokemon_name.lower():
-                    pokemon_id = pid
-                    pokemon_name = name # Update name to correct casing
-                    break
-
-        if not pokemon_id:
-            # Fallback: Check if user entered an ID manually
-            if pokemon_name.isdigit():
-                pokemon_id = int(pokemon_name)
-                pokemon_name = POKEMON_IDS.get(pokemon_id, f"Unknown #{pokemon_id}")
-            else:
-                await interaction.response.send_message(f"❌ Neznámý Pokémon '{pokemon_name}'. Prosím vyberte ze seznamu.", ephemeral=True)
-                return
-
+    async def create_listing_final(self, interaction: discord.Interaction, account_id: int, listing_type: str, pokemon_id: int, pokemon_name: str, shiny: bool, purified: bool, popis: str):
         try:
             listing_id = await database.add_listing(
                 user_id=interaction.user.id,
+                account_id=account_id,
                 listing_type=listing_type,
                 pokemon_id=pokemon_id,
                 is_shiny=shiny,
@@ -130,12 +144,22 @@ class Listings(commands.Cog):
             details_str = f"| {popis}" if popis else ""
             type_str = "Nabízím" if listing_type == 'HAVE' else "Hledám"
 
-            await interaction.response.send_message(
+            # Fetch account name for confirmation
+            account = await database.get_account(account_id)
+            acc_name = account['account_name'] if account else "Unknown"
+
+            msg = (
                 f"✅ **{type_str} vytvořena!** (ID: {listing_id})\n"
-                f"{type_str}: {pokemon_name} {shiny_str} {purified_str} {details_str}",
-                ephemeral=False
+                f"👤 **Účet:** {acc_name}\n"
+                f"{type_str}: {pokemon_name} {shiny_str} {purified_str} {details_str}"
             )
-            logger.info(f"User {interaction.user.id} added listing {listing_type} {pokemon_name} (#{pokemon_id}) (ID: {listing_id})")
+
+            if interaction.response.is_done():
+                 await interaction.followup.send(msg, ephemeral=False)
+            else:
+                 await interaction.response.send_message(msg, ephemeral=False)
+
+            logger.info(f"User {interaction.user.id} added listing {listing_type} {pokemon_name} (#{pokemon_id}) for account {account_id} (ID: {listing_id})")
 
             # Check for matches
             if interaction.guild:
@@ -147,7 +171,41 @@ class Listings(commands.Cog):
             logger.error(f"Error adding listing: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message("❌ Nastala chyba při vytváření záznamu.", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ Nastala chyba při vytváření záznamu.", ephemeral=True)
 
+    async def _handle_listing_creation(self, interaction: discord.Interaction, listing_type: str, pokemon_name: str, shiny: bool, purified: bool, popis: str):
+        # Resolve Pokemon ID
+        pokemon_id = POKEMON_NAMES.get(pokemon_name.title())
+        if not pokemon_id:
+            for name, pid in POKEMON_NAMES.items():
+                if name.lower() == pokemon_name.lower():
+                    pokemon_id = pid
+                    pokemon_name = name
+                    break
+
+        if not pokemon_id:
+            if pokemon_name.isdigit():
+                pokemon_id = int(pokemon_name)
+                pokemon_name = POKEMON_IDS.get(pokemon_id, f"Unknown #{pokemon_id}")
+            else:
+                await interaction.response.send_message(f"❌ Neznámý Pokémon '{pokemon_name}'. Prosím vyberte ze seznamu.", ephemeral=True)
+                return
+
+        # Check for accounts
+        accounts = await database.get_user_accounts(interaction.user.id)
+
+        if not accounts:
+            await interaction.response.send_message("❌ Nemáte registrovaný žádný účet. Použijte `/registrace`.", ephemeral=True)
+            return
+
+        if len(accounts) == 1:
+            # Auto-select the only account
+            await self.create_listing_final(interaction, accounts[0]['id'], listing_type, pokemon_id, pokemon_name, shiny, purified, popis)
+        else:
+            # Ask user to select account
+            view = AccountSelectView(accounts, listing_type, pokemon_id, pokemon_name, shiny, purified, popis)
+            await interaction.response.send_message("Vyberte účet, pro který chcete tuto nabídku vytvořit:", view=view, ephemeral=True)
 
     @app_commands.command(name="nabidka", description="Nabídni Pokémona k výměně (Offer a Pokemon)")
     @app_commands.describe(
@@ -185,6 +243,7 @@ class Listings(commands.Cog):
 
             embed = discord.Embed(title="Moje Seznamy (My Lists)", color=discord.Color.blue())
 
+            # Group by Listing Type, but mention Account
             nabidky_text = ""
             poptavky_text = ""
 
@@ -192,6 +251,7 @@ class Listings(commands.Cog):
                 l_id = l['id']
                 l_type = l['listing_type']
                 p_id = l['pokemon_id']
+                acc_name = l['account_name']
 
                 p_name = POKEMON_IDS.get(p_id, f"Unknown #{p_id}")
 
@@ -199,7 +259,7 @@ class Listings(commands.Cog):
                 purified = "🕊️" if l['is_purified'] else ""
                 details = f"({l['details']})" if l['details'] else ""
 
-                line = f"**#{l_id}** | {p_name} {shiny} {purified} {details}\n"
+                line = f"**#{l_id}** [{acc_name}] | {p_name} {shiny} {purified} {details}\n"
 
                 if l_type == 'HAVE':
                     nabidky_text += line
