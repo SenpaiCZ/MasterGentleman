@@ -9,6 +9,31 @@ from data.pokemon import POKEMON_NAMES, POKEMON_IDS
 
 logger = logging.getLogger('discord')
 
+TEAMS = {
+    "Mystic": discord.Color.blue(),
+    "Valor": discord.Color.red(),
+    "Instinct": discord.Color.gold()
+}
+
+async def get_user_team_color(user_id):
+    accounts = await database.get_user_accounts(user_id)
+    if not accounts:
+        return discord.Color.default()
+
+    # Try to find main account
+    main = next((acc for acc in accounts if acc['is_main']), accounts[0])
+    team_name = main['team']
+    return TEAMS.get(team_name, discord.Color.default())
+
+class ListingConfirmationView(ui.View):
+    def __init__(self, friend_code):
+        super().__init__(timeout=None)
+        self.friend_code = friend_code
+
+    @ui.button(label="📋 Zkopírovat můj FC", style=discord.ButtonStyle.secondary)
+    async def copy_fc(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.send_message(f"{self.friend_code}", ephemeral=True)
+
 class AccountSelect(ui.Select):
     def __init__(self, accounts, listing_type, pokemon_id, pokemon_name, is_shiny, is_purified, details):
         self.listing_type = listing_type
@@ -101,8 +126,11 @@ class Listings(commands.Cog):
             # Update DB with channel ID
             await database.update_trade_channel(trade_id, channel.id)
 
+            # Determine Embed Color (User A's team)
+            embed_color = await get_user_team_color(listing_a['user_id'])
+
             # Send Embed
-            embed = discord.Embed(title="🤝 Shoda Obchodu! (Trade Match!)", description="Byla nalezena shoda pro vaši nabídku/poptávku.", color=discord.Color.green())
+            embed = discord.Embed(title="🤝 Shoda Obchodu! (Trade Match!)", description="Byla nalezena shoda pro vaši nabídku/poptávku.", color=embed_color)
 
             desc_a = f"{name_a} {'✨' if listing_a['is_shiny'] else ''} {'🕊️' if listing_a['is_purified'] else ''} {listing_a['details'] or ''}"
             desc_b = f"{name_b} {'✨' if listing_b['is_shiny'] else ''} {'🕊️' if listing_b['is_purified'] else ''} {listing_b['details'] or ''}"
@@ -111,15 +139,28 @@ class Listings(commands.Cog):
             acc_a = f"{listing_a['account_name']} (FC: {listing_a['friend_code']})"
             acc_b = f"{listing_b['account_name']} (FC: {listing_b['friend_code']})"
 
-            embed.add_field(name=f"Uživatel A ({user_a.display_name if user_a else 'Unknown'})", value=f"**Účet:** {acc_a}\n{listing_a['listing_type']}: {desc_a}", inline=False)
-            embed.add_field(name=f"Uživatel B ({user_b.display_name if user_b else 'Unknown'})", value=f"**Účet:** {acc_b}\n{listing_b['listing_type']}: {desc_b}", inline=False)
+            name_display_a = user_a.display_name if user_a else 'Unknown'
+            name_display_b = user_b.display_name if user_b else 'Unknown'
+
+            embed.add_field(name=f"Uživatel A: {name_display_a}", value=f"**Účet:** {acc_a}\n{listing_a['listing_type']}: {desc_a}", inline=False)
+            embed.add_field(name=f"Uživatel B: {name_display_b}", value=f"**Účet:** {acc_b}\n{listing_b['listing_type']}: {desc_b}", inline=False)
 
             embed.set_footer(text="Dohodněte se na výměně zde. Až bude hotovo, stiskněte 'Obchod Dokončen'.")
+
+            # Customize Buttons
+            view = views.trade.TradeView()
+
+            # Find and update buttons
+            for child in view.children:
+                if child.custom_id == "trade_copy_fc_a":
+                    child.label = f"📋 FC {name_display_a}"
+                elif child.custom_id == "trade_copy_fc_b":
+                    child.label = f"📋 FC {name_display_b}"
 
             await channel.send(
                 content=f"{user_a.mention if user_a else ''} {user_b.mention if user_b else ''}",
                 embed=embed,
-                view=views.trade.TradeView()
+                view=view
             )
 
             logger.info(f"Created trade channel {channel.id} for trade {trade_id}")
@@ -147,6 +188,7 @@ class Listings(commands.Cog):
             # Fetch account name for confirmation
             account = await database.get_account(account_id)
             acc_name = account['account_name'] if account else "Unknown"
+            friend_code = account['friend_code'] if account else "Unknown"
 
             msg = (
                 f"✅ **{type_str} vytvořena!** (ID: {listing_id})\n"
@@ -154,10 +196,12 @@ class Listings(commands.Cog):
                 f"{type_str}: {pokemon_name} {shiny_str} {purified_str} {details_str}"
             )
 
+            view = ListingConfirmationView(friend_code)
+
             if interaction.response.is_done():
-                 await interaction.followup.send(msg, ephemeral=False)
+                 await interaction.followup.send(msg, view=view, ephemeral=False)
             else:
-                 await interaction.response.send_message(msg, ephemeral=False)
+                 await interaction.response.send_message(msg, view=view, ephemeral=False)
 
             logger.info(f"User {interaction.user.id} added listing {listing_type} {pokemon_name} (#{pokemon_id}) for account {account_id} (ID: {listing_id})")
 
@@ -241,7 +285,8 @@ class Listings(commands.Cog):
                 await interaction.response.send_message("Nemáte žádné aktivní nabídky ani poptávky.", ephemeral=True)
                 return
 
-            embed = discord.Embed(title="Moje Seznamy (My Lists)", color=discord.Color.blue())
+            embed_color = await get_user_team_color(interaction.user.id)
+            embed = discord.Embed(title="Moje Seznamy (My Lists)", color=embed_color)
 
             # Group by Listing Type, but mention Account
             nabidky_text = ""

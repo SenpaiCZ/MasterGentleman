@@ -1,6 +1,7 @@
 import discord
 import database
 import logging
+import asyncio
 
 logger = logging.getLogger('discord')
 
@@ -25,7 +26,7 @@ class TradeView(discord.ui.View):
 
         return trade, listing_a, listing_b
 
-    @discord.ui.button(label="Obchod Dokončen (Complete)", style=discord.ButtonStyle.green, custom_id="trade_complete")
+    @discord.ui.button(label="Obchod Dokončen (Complete)", style=discord.ButtonStyle.green, custom_id="trade_complete", row=1)
     async def complete_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
         trade, listing_a, listing_b = await self._get_trade_context(interaction)
         if not trade:
@@ -48,7 +49,6 @@ class TradeView(discord.ui.View):
             # We can use delete(delay=5) on channel, but interaction doesn't expose that directly on response.
             # We can use asyncio.sleep
             # Note: Using create_task to avoid blocking
-            import asyncio
             await asyncio.sleep(5)
             await interaction.channel.delete()
 
@@ -57,7 +57,7 @@ class TradeView(discord.ui.View):
             if not interaction.response.is_done():
                 await interaction.response.send_message("❌ Nastala chyba při dokončování obchodu.", ephemeral=True)
 
-    @discord.ui.button(label="Zrušit Obchod (Cancel)", style=discord.ButtonStyle.red, custom_id="trade_cancel")
+    @discord.ui.button(label="Zrušit Obchod (Cancel)", style=discord.ButtonStyle.red, custom_id="trade_cancel", row=1)
     async def cancel_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
         trade, listing_a, listing_b = await self._get_trade_context(interaction)
         if not trade:
@@ -73,7 +73,6 @@ class TradeView(discord.ui.View):
 
             await interaction.response.send_message("⚠️ Obchod byl zrušen. Nabídky jsou opět aktivní. Kanál bude smazán za 5 sekund. (Trade Cancelled)")
 
-            import asyncio
             await asyncio.sleep(5)
             await interaction.channel.delete()
 
@@ -81,3 +80,24 @@ class TradeView(discord.ui.View):
             logger.error(f"Error cancelling trade: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message("❌ Nastala chyba při rušení obchodu.", ephemeral=True)
+
+    @discord.ui.button(label="📋 FC A (Kopírovat)", style=discord.ButtonStyle.secondary, custom_id="trade_copy_fc_a", row=0)
+    async def copy_fc_a(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Copies Friend Code for Listing A"""
+        trade, listing_a, listing_b = await self._get_trade_context(interaction)
+        if not trade:
+            return
+
+        fc = listing_a['friend_code']
+        # For mobile users, just sending the number is best as they can long press -> copy
+        await interaction.response.send_message(f"{fc}", ephemeral=True)
+
+    @discord.ui.button(label="📋 FC B (Kopírovat)", style=discord.ButtonStyle.secondary, custom_id="trade_copy_fc_b", row=0)
+    async def copy_fc_b(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Copies Friend Code for Listing B"""
+        trade, listing_a, listing_b = await self._get_trade_context(interaction)
+        if not trade:
+            return
+
+        fc = listing_b['friend_code']
+        await interaction.response.send_message(f"{fc}", ephemeral=True)
