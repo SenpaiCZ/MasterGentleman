@@ -6,7 +6,7 @@ import services.matcher as matcher
 import views.trade
 from views.listing import ListingDraftView
 import logging
-from data.pokemon import POKEMON_NAMES, POKEMON_IDS
+from data.pokemon import POKEMON_NAMES, POKEMON_IDS, POKEMON_IMAGES
 
 logger = logging.getLogger('discord')
 
@@ -100,6 +100,16 @@ class Listings(commands.Cog):
             # Send Embed
             embed = discord.Embed(title="🤝 Shoda Obchodu! (Trade Match!)", description="Byla nalezena shoda pro vaši nabídku/poptávku.", color=embed_color)
 
+            # Get Image
+            img_info = POKEMON_IMAGES.get(listing_a['pokemon_id'])
+            if img_info:
+                # Use Listing A's shiny preference as default
+                img_url = img_info.get('shiny') if listing_a['is_shiny'] else img_info.get('normal')
+                if not img_url:
+                    img_url = img_info.get('normal')
+                if img_url:
+                    embed.set_thumbnail(url=img_url)
+
             desc_a = f"{name_a} {'✨' if listing_a['is_shiny'] else ''} {'🕊️' if listing_a['is_purified'] else ''} {listing_a['details'] or ''}"
             desc_b = f"{name_b} {'✨' if listing_b['is_shiny'] else ''} {'🕊️' if listing_b['is_purified'] else ''} {listing_b['details'] or ''}"
 
@@ -158,11 +168,22 @@ class Listings(commands.Cog):
             acc_name = account['account_name'] if account else "Unknown"
             friend_code = account['friend_code'] if account else "Unknown"
 
-            msg = (
-                f"✅ **{type_str} vytvořena!** (ID: {listing_id})\n"
-                f"👤 **Účet:** {acc_name}\n"
-                f"{type_str}: {pokemon_name} {shiny_str} {purified_str} {details_str}"
+            # Construct confirmation embed
+            embed = discord.Embed(
+                title=f"✅ {type_str} vytvořena! (ID: {listing_id})",
+                description=f"{type_str}: {pokemon_name} {shiny_str} {purified_str} {details_str}",
+                color=discord.Color.green()
             )
+            embed.add_field(name="Účet", value=f"{acc_name}", inline=False)
+
+            # Get Image
+            img_info = POKEMON_IMAGES.get(pokemon_id)
+            if img_info:
+                img_url = img_info.get('shiny') if shiny else img_info.get('normal')
+                if not img_url:
+                    img_url = img_info.get('normal')
+                if img_url:
+                    embed.set_thumbnail(url=img_url)
 
             view = ListingConfirmationView(friend_code)
 
@@ -171,7 +192,7 @@ class Listings(commands.Cog):
 
             # Send the PUBLIC message to the channel so others can see it
             if interaction.channel:
-                await interaction.channel.send(msg, view=view)
+                await interaction.channel.send(embed=embed, view=view)
             else:
                 logger.warning(f"Could not send public message for listing {listing_id} - no channel.")
 
