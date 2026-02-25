@@ -1,6 +1,7 @@
 import discord
 from discord import ui
 import logging
+from data.pokemon import POKEMON_IMAGES
 
 logger = logging.getLogger('discord')
 
@@ -146,6 +147,17 @@ class ListingDraftView(ui.View):
         desc += f"\n👤 **Účet:** {self.selected_account_name} (`{self.selected_account_fc}`)"
 
         embed = discord.Embed(title=title, description=desc, color=color)
+
+        # Get Image
+        img_info = POKEMON_IMAGES.get(self.pokemon_id)
+        if img_info:
+            img_url = img_info.get('shiny') if self.is_shiny else img_info.get('normal')
+            if not img_url:
+                img_url = img_info.get('normal')
+
+            if img_url:
+                embed.set_thumbnail(url=img_url)
+
         embed.set_footer(text="Upravte detaily pomocí tlačítek a potvrďte zveřejnění.")
         return embed
 
