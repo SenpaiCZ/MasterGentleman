@@ -57,7 +57,8 @@ class RegionSelect(ui.Select):
             f"✅ **Registrace dokončena!**\n\n"
             f"👤 **Friend Code:** {self.friend_code}\n"
             f"🛡️ **Tým:** {self.team}\n"
-            f"📍 **Region:** {region}",
+            f"📍 **Region:** {region}\n\n"
+            f"💡 *Tip: Použijte `/profil` pro zobrazení karty trenéra nebo `/nabidka` pro přidání Pokémonů.*",
             ephemeral=True
         )
 
