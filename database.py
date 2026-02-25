@@ -49,6 +49,30 @@ async def init_db():
                     FOREIGN KEY (listing_b_id) REFERENCES listings (id)
                 )
             """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    link TEXT NOT NULL,
+                    image_url TEXT,
+                    start_time INTEGER NOT NULL,
+                    end_time INTEGER,
+                    notified_2h BOOLEAN DEFAULT 0,
+                    notified_5m BOOLEAN DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(link)
+                )
+            """)
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_start_time ON events (start_time)
+            """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS event_config (
+                    guild_id INTEGER PRIMARY KEY,
+                    channel_id INTEGER,
+                    role_id INTEGER
+                )
+            """)
             await db.commit()
             logger.info("Database initialized successfully (fresh start).")
     except Exception as e:
@@ -194,6 +218,82 @@ async def check_trade_history(listing_a_id, listing_b_id):
             OR (listing_a_id = ? AND listing_b_id = ?)
         """
         async with db.execute(sql, (listing_a_id, listing_b_id, listing_b_id, listing_a_id)) as cursor:
+            return await cursor.fetchone()
+
+async def upsert_event(name, link, image_url, start_time, end_time):
+    async with aiosqlite.connect(DB_NAME) as db:
+        # Check if exists
+        async with db.execute("SELECT id FROM events WHERE link = ?", (link,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                # Update info if needed, but don't reset notified flags unless intended
+                # We update start_time and end_time in case they changed
+                await db.execute("""
+                    UPDATE events
+                    SET name = ?, image_url = ?, start_time = ?, end_time = ?
+                    WHERE id = ?
+                """, (name, image_url, start_time, end_time, row[0]))
+                await db.commit()
+                return row[0]
+            else:
+                cursor = await db.execute("""
+                    INSERT INTO events (name, link, image_url, start_time, end_time)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (name, link, image_url, start_time, end_time))
+                await db.commit()
+                return cursor.lastrowid
+
+async def get_upcoming_events(from_time, to_time=None):
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        sql = "SELECT * FROM events WHERE start_time >= ?"
+        params = [from_time]
+        if to_time:
+            sql += " AND start_time <= ?"
+            params.append(to_time)
+        sql += " ORDER BY start_time ASC"
+        async with db.execute(sql, tuple(params)) as cursor:
+            return await cursor.fetchall()
+
+async def get_events_for_notification(threshold_start, threshold_end, notification_type):
+    """
+    Get events starting between threshold_start and threshold_end
+    that haven't been notified yet for the given type.
+    notification_type: '2h' or '5m'
+    """
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        col_name = f"notified_{notification_type}"
+        sql = f"SELECT * FROM events WHERE start_time BETWEEN ? AND ? AND {col_name} = 0"
+        async with db.execute(sql, (threshold_start, threshold_end)) as cursor:
+            return await cursor.fetchall()
+
+async def mark_event_notified(event_id, notification_type):
+    async with aiosqlite.connect(DB_NAME) as db:
+        col_name = f"notified_{notification_type}"
+        await db.execute(f"UPDATE events SET {col_name} = 1 WHERE id = ?", (event_id,))
+        await db.commit()
+
+async def set_event_config(guild_id, channel_id=None, role_id=None):
+    async with aiosqlite.connect(DB_NAME) as db:
+        # Upsert
+        async with db.execute("SELECT * FROM event_config WHERE guild_id = ?", (guild_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                # Update provided fields
+                if channel_id:
+                    await db.execute("UPDATE event_config SET channel_id = ? WHERE guild_id = ?", (channel_id, guild_id))
+                if role_id:
+                    await db.execute("UPDATE event_config SET role_id = ? WHERE guild_id = ?", (role_id, guild_id))
+            else:
+                await db.execute("INSERT INTO event_config (guild_id, channel_id, role_id) VALUES (?, ?, ?)",
+                                 (guild_id, channel_id, role_id))
+        await db.commit()
+
+async def get_event_config(guild_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM event_config WHERE guild_id = ?", (guild_id,)) as cursor:
             return await cursor.fetchone()
 
 # For debugging/verification
