@@ -31,7 +31,8 @@ REGIONS = [
 
 async def save_user_registration(interaction, friend_code, team, region, account_name, is_main):
     """Helper to save user and update roles."""
-    await interaction.response.defer(ephemeral=True)
+    # Show loading state first
+    await interaction.response.edit_message(content="⏳ Ukládám údaje...", view=None, embed=None)
 
     try:
         await database.add_user_account(
@@ -44,27 +45,23 @@ async def save_user_registration(interaction, friend_code, team, region, account
         )
     except Exception as e:
         logger.error(f"Error saving user registration: {e}")
-        await interaction.followup.send("❌ Nastala chyba při ukládání registrace.", ephemeral=True)
+        await interaction.edit_original_response(content="❌ Nastala chyba při ukládání registrace.", view=None)
         return
 
-    # Update roles (only if it's the main account or first account? Or always?)
-    # Usually we want roles to reflect the user's presence.
-    # If they add an Alt with different Team, do we add that role too?
-    # Let's assume we just add the roles.
+    # Update roles
     cog = interaction.client.get_cog("Registration")
     if cog:
         await cog.update_user_roles(interaction.guild, interaction.user, team, region)
 
     type_str = "Hlavní" if is_main else "Vedlejší"
-    await interaction.followup.send(
-        f"✅ **Účet přidán!**\n\n"
-        f"🏷️ **Název:** {account_name} ({type_str})\n"
-        f"👤 **Friend Code:** {friend_code}\n"
-        f"🛡️ **Tým:** {team}\n"
-        f"📍 **Region:** {region}\n\n"
-        f"💡 *Tip: Použijte `/nabidka` pro přidání Pokémonů pro tento účet.*",
-        ephemeral=True
+    embed = discord.Embed(
+        title="✅ Registrace Dokončena",
+        description=f"**Účet:** {account_name} ({type_str})\n**FC:** `{friend_code}`\n**Tým:** {team}\n**Region:** {region}",
+        color=TEAMS.get(team, discord.Color.green())
     )
+    embed.set_footer(text="Tip: Použijte /nabidka pro přidání Pokémonů.")
+
+    await interaction.edit_original_response(content="", embed=embed, view=None)
 
 class AccountTypeSelect(ui.Select):
     def __init__(self, friend_code, team, region, account_name):
@@ -104,10 +101,15 @@ class RegionSelect(ui.Select):
             await save_user_registration(interaction, self.friend_code, self.team, region, self.account_name, True)
         else:
             # ADD_ACCOUNT: Ask for Main/Alt
-            await interaction.response.send_message(
-                f"Vybrán region: **{region}**. Je tento účet hlavní nebo vedlejší?",
-                view=AccountTypeView(self.friend_code, self.team, region, self.account_name),
-                ephemeral=True
+            embed = discord.Embed(
+                title="Krok 3/3: Typ Účtu",
+                description=f"Vybrán region: **{region}**.\nJe tento účet hlavní nebo vedlejší?",
+                color=TEAMS.get(self.team, discord.Color.light_grey())
+            )
+            await interaction.response.edit_message(
+                content="",
+                embed=embed,
+                view=AccountTypeView(self.friend_code, self.team, region, self.account_name)
             )
 
 class RegionSelectView(ui.View):
@@ -129,10 +131,15 @@ class TeamSelect(ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         team = self.values[0]
-        await interaction.response.send_message(
-            f"Vybrán tým: **{team}**. Nyní vyberte region.",
-            view=RegionSelectView(self.friend_code, team, self.account_name, self.mode),
-            ephemeral=True
+        embed = discord.Embed(
+            title="Krok 2: Vyberte Region",
+            description=f"Vybrán tým: **{team}**.\nKde nejčastěji hrajete?",
+            color=TEAMS.get(team, discord.Color.light_grey())
+        )
+        await interaction.response.edit_message(
+            content="",
+            embed=embed,
+            view=RegionSelectView(self.friend_code, team, self.account_name, self.mode)
         )
 
 class TeamSelectView(ui.View):
@@ -155,8 +162,13 @@ class RegistrationModal(ui.Modal, title="Registrace Trenéra"):
             await interaction.response.send_message("❌ Friend Code musí obsahovat přesně 12 číslic.", ephemeral=True)
             return
 
+        embed = discord.Embed(
+            title="Krok 1: Vyberte Tým",
+            description=f"Friend Code **{code}** přijat.\nZa jaký tým hrajete?",
+            color=discord.Color.light_grey()
+        )
         await interaction.response.send_message(
-            f"Friend Code **{code}** přijat. Nyní vyberte svůj tým.",
+            embed=embed,
             view=TeamSelectView(code, "Main", "REGISTER"),
             ephemeral=True
         )
@@ -187,8 +199,13 @@ class AddAccountModal(ui.Modal, title="Přidat další účet"):
         if not name:
             name = "Alt"
 
+        embed = discord.Embed(
+            title="Krok 1: Vyberte Tým",
+            description=f"Účet **{name}** (FC: {code}) připraven.\nZa jaký tým hraje?",
+            color=discord.Color.light_grey()
+        )
         await interaction.response.send_message(
-            f"Účet **{name}** (FC: {code}) připraven. Vyberte tým.",
+            embed=embed,
             view=TeamSelectView(code, name, "ADD_ACCOUNT"),
             ephemeral=True
         )
