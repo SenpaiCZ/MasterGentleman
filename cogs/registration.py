@@ -53,7 +53,7 @@ async def save_user_registration(interaction, friend_code, team, region, account
     if cog:
         await cog.sync_roles_with_main_account(interaction.guild, interaction.user)
 
-    type_str = "Hlavní" if is_main else "Vedlejší"
+    type_str = "Hlavní" if is_main else "Rodina/Přátelé"
     embed = discord.Embed(
         title="✅ Registrace Dokončena",
         description=f"**Účet:** {account_name} ({type_str})\n**FC:** `{friend_code}`\n**Tým:** {team}\n**Region:** {region}",
@@ -71,7 +71,7 @@ class AccountTypeSelect(ui.Select):
         self.account_name = account_name
         options = [
             discord.SelectOption(label="Hlavní účet (Main)", value="True", description="Toto bude můj hlavní účet"),
-            discord.SelectOption(label="Vedlejší účet (Alt)", value="False", description="Toto je vedlejší účet")
+            discord.SelectOption(label="Účet pro dalšího hráče bez Discordu", value="False", description="Např. pro rodinu nebo přátele")
         ]
         super().__init__(placeholder="Je toto hlavní účet?", min_values=1, max_values=1, options=options)
 
@@ -103,7 +103,7 @@ class RegionSelect(ui.Select):
             # ADD_ACCOUNT: Ask for Main/Alt
             embed = discord.Embed(
                 title="Krok 3/3: Typ Účtu",
-                description=f"Vybrán region: **{region}**.\nJe tento účet hlavní nebo vedlejší?",
+                description=f"Vybrán region: **{region}**.\nJe tento účet váš hlavní, nebo pro dalšího hráče?",
                 color=TEAMS.get(self.team, discord.Color.light_grey())
             )
             await interaction.response.edit_message(
@@ -451,7 +451,7 @@ class Registration(commands.Cog):
 
         await interaction.response.send_modal(RegistrationModal())
 
-    @app_commands.command(name="pridat_ucet", description="Přidat další herní účet (multi-account)")
+    @app_commands.command(name="pridat_ucet", description="Přidat účet pro dalšího hráče bez Discordu")
     async def pridat_ucet(self, interaction: discord.Interaction):
         """Přidá další účet pro uživatele."""
         # Check if user registered first
