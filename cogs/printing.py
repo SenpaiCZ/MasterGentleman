@@ -70,12 +70,13 @@ class Printing(commands.Cog):
             team_color = TEAMS.get(account['team'], discord.Color.default())
             color_rgb = team_color.to_rgb()
 
-            title = "SEZNAM POPTÁVKY" if typ == "WANT" else "SEZNAM NABÍDKY"
+            title = "Chci" if typ == "WANT" else "Nabízím"
             # Use In-Game Name
             user_name = account['account_name']
+            friend_code = account.get('friend_code')
 
             # Generate Image
-            image_buffer = await self.generator.generate_card(filtered_listings, title, user_name, color_rgb)
+            image_buffer = await self.generator.generate_card(filtered_listings, title, user_name, color_rgb, friend_code)
 
             if not image_buffer:
                 await interaction.followup.send("❌ Nepodařilo se vygenerovat obrázek (možná chybí data).", ephemeral=True)

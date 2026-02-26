@@ -411,10 +411,12 @@ class Listings(commands.Cog):
 
     @moje_group.command(name="nabidky", description="Spravovat mé nabídky (Manage My Offers)")
     async def moje_nabidky(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         await self._show_management_view(interaction, 'HAVE')
 
     @moje_group.command(name="poptavky", description="Spravovat mé poptávky (Manage My Requests)")
     async def moje_poptavky(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         await self._show_management_view(interaction, 'WANT')
 
     async def _show_management_view(self, interaction: discord.Interaction, listing_type: str):
@@ -423,7 +425,7 @@ class Listings(commands.Cog):
         listings = [l for l in all_listings if l['listing_type'] == listing_type]
 
         if not listings:
-            await interaction.response.send_message(f"Nemáte žádné aktivní záznamy typu {listing_type}.", ephemeral=True)
+            await interaction.followup.send(f"Nemáte žádné aktivní záznamy typu {listing_type}.", ephemeral=True)
             return
 
         callbacks = {
@@ -439,7 +441,7 @@ class Listings(commands.Cog):
         title_prefix = "Moje Nabídky" if listing_type == 'HAVE' else "Moje Poptávky"
         embed.title = f"{title_prefix} (My Listings)"
 
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     async def _delete_listing_callback(self, interaction: discord.Interaction, listing_id: int, view: ListingManagementView):
         listing = await database.get_listing(listing_id)

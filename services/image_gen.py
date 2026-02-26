@@ -6,6 +6,7 @@ import logging
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 from data.pokemon import POKEMON_IMAGES, POKEMON_IDS
+import qrcode
 
 logger = logging.getLogger('discord')
 
@@ -117,7 +118,7 @@ class ImageGenerator:
         ty = y - th/2 - 1 # visual adjustment
         draw.text((tx, ty), text, font=font, fill=text_color)
 
-    def _generate_card_sync(self, listings, title, user_name, team_color_rgb):
+    def _generate_card_sync(self, listings, title, user_name, team_color_rgb, friend_code):
         """Sync implementation of image generation."""
         num_items = len(listings)
         cols = math.ceil(math.sqrt(num_items))
@@ -129,42 +130,74 @@ class ImageGenerator:
         # Dimensions
         CELL_W, CELL_H = 120, 150
         MARGIN = 20
-        HEADER_H = 60
+        HEADER_H = 40 # Increased height for name inside header
+        QR_SIZE = 100
+        QR_PADDING = 10
+        TITLE_H = 20
+        FOOTER_H = 30
+
+        # QR Section Height (QR + Padding + Title)
+        qr_height = QR_SIZE + 5 if friend_code else 0
+        TOP_SECTION_H = HEADER_H + QR_PADDING + qr_height + TITLE_H + 10
 
         IMG_W = cols * CELL_W + 2 * MARGIN
-        IMG_H = rows * CELL_H + 2 * MARGIN + HEADER_H
+        IMG_H = TOP_SECTION_H + rows * CELL_H + MARGIN + FOOTER_H
 
         bg_color = (54, 57, 63)
         img = Image.new('RGBA', (IMG_W, IMG_H), bg_color)
         draw = ImageDraw.Draw(img)
 
-        # Header
-        draw.rectangle([(0, 0), (IMG_W, 10)], fill=team_color_rgb)
-
+        # --- Fonts ---
         try:
-            font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 24)
-            font_user = ImageFont.truetype("DejaVuSans-Bold.ttf", 20)
+            # Reduced font sizes as requested
+            font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 12) # Half size (prev 24)
+            font_user = ImageFont.truetype("DejaVuSans-Bold.ttf", 14)  # Smaller (prev 20)
             font_text = ImageFont.truetype("DejaVuSans.ttf", 14)
             font_small = ImageFont.truetype("DejaVuSans.ttf", 10)
-            # Make a slightly smaller font for badges if needed, but 10 is usually ok
             font_badge = ImageFont.truetype("DejaVuSans-Bold.ttf", 10)
+            font_footer = ImageFont.truetype("DejaVuSans.ttf", 12)
         except OSError:
             font_title = ImageFont.load_default()
             font_user = ImageFont.load_default()
             font_text = ImageFont.load_default()
             font_small = ImageFont.load_default()
             font_badge = ImageFont.load_default()
+            font_footer = ImageFont.load_default()
 
-        draw.text((MARGIN, 20), title, font=font_title, fill=(255, 255, 255))
-        # User name aligned to right, White color, Bold font
-        draw.text((IMG_W - MARGIN, 22), user_name, font=font_user, fill=(255, 255, 255), anchor="ra")
+        # --- Header ---
+        # Team Colored Strip
+        draw.rectangle([(0, 0), (IMG_W, HEADER_H)], fill=team_color_rgb)
+
+        # User Name inside Header (Right Aligned)
+        # Using anchor 'rm' (Right Middle)
+        draw.text((IMG_W - MARGIN, HEADER_H / 2), user_name, font=font_user, fill=(255, 255, 255), anchor="rm")
+
+        # --- QR Code & Title Section ---
+        current_y = HEADER_H + QR_PADDING
+
+        if friend_code:
+            try:
+                qr = qrcode.make(friend_code)
+                qr = qr.resize((QR_SIZE, QR_SIZE), Image.Resampling.LANCZOS)
+                # Paste QR code centered
+                qr_x = (IMG_W - QR_SIZE) // 2
+                img.paste(qr, (qr_x, current_y))
+            except Exception as e:
+                logger.error(f"Error generating QR code: {e}")
+            current_y += QR_SIZE + 5
+
+        # Title (Centered below QR)
+        draw.text((IMG_W // 2, current_y), title, font=font_title, fill=(255, 255, 255), anchor="mt")
+
+        # --- Grid ---
+        grid_start_y = TOP_SECTION_H
 
         for i, item in enumerate(listings):
             col = i % cols
             row = i // cols
 
             x = MARGIN + col * CELL_W
-            y = MARGIN + HEADER_H + row * CELL_H
+            y = grid_start_y + row * CELL_H
 
             draw.rectangle([(x + 2, y + 2), (x + CELL_W - 2, y + CELL_H - 2)], fill=(47, 49, 54), outline=None)
 
@@ -234,12 +267,17 @@ class ImageGenerator:
             if is_adventure_effect:
                 self._draw_badge(draw, "Adv", (x + 20, y + 95), (75, 0, 130), (255, 255, 255), font_badge)
 
+        # --- Footer ---
+        footer_text = "senpai.cz/pogo"
+        footer_y = IMG_H - FOOTER_H / 2
+        draw.text((IMG_W // 2, footer_y), footer_text, font=font_footer, fill=(180, 180, 180), anchor="mm")
+
         out = BytesIO()
         img.save(out, format='PNG', optimize=True)
         out.seek(0)
         return out
 
-    async def generate_card(self, listings, title, user_name, team_color_rgb):
+    async def generate_card(self, listings, title, user_name, team_color_rgb, friend_code=None):
         """
         Generates a trade card image (Async Wrapper).
         """
@@ -258,7 +296,7 @@ class ImageGenerator:
         image_buffer = await loop.run_in_executor(
             None,
             self._generate_card_sync,
-            listings, title, user_name, team_color_rgb
+            listings, title, user_name, team_color_rgb, friend_code
         )
 
         return image_buffer
