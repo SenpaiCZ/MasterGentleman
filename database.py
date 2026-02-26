@@ -87,7 +87,7 @@ async def add_user_account(user_id, friend_code, team, region, account_name="Mai
             count = (await cursor.fetchone())[0]
             if count == 0:
                 is_main = True
-                account_name = "Main" # Force name for first account
+                # account_name = "Main" # User should specify name now
 
         await db.execute("""
             INSERT INTO users (user_id, friend_code, team, region, account_name, is_main, updated_at)
@@ -142,6 +142,19 @@ async def get_user_listings(user_id, status='ACTIVE'):
             ORDER BY l.created_at DESC, l.id DESC
         """
         async with db.execute(sql, (user_id, status)) as cursor:
+            return await cursor.fetchall()
+
+async def get_account_listings(account_id, status='ACTIVE'):
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        sql = """
+            SELECT l.*, u.account_name
+            FROM listings l
+            JOIN users u ON l.account_id = u.id
+            WHERE l.account_id = ? AND l.status = ?
+            ORDER BY l.created_at DESC, l.id DESC
+        """
+        async with db.execute(sql, (account_id, status)) as cursor:
             return await cursor.fetchall()
 
 async def update_listing_status(listing_id, status):
