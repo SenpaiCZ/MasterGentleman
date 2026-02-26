@@ -39,6 +39,16 @@ class Listings(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    def _format_attributes(self, l):
+        attrs = []
+        if l.get('is_shiny'): attrs.append("✨")
+        if l.get('is_purified'): attrs.append("🕊️")
+        if l.get('is_dynamax'): attrs.append("Dyna")
+        if l.get('is_gigantamax'): attrs.append("Giga")
+        if l.get('is_background'): attrs.append("🌍")
+        if l.get('is_adventure_effect'): attrs.append("🪄")
+        return " ".join(attrs)
+
     async def pokemon_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         current = current.lower()
         choices = []
@@ -110,8 +120,11 @@ class Listings(commands.Cog):
                 if img_url:
                     embed.set_thumbnail(url=img_url)
 
-            desc_a = f"{name_a} {'✨' if listing_a['is_shiny'] else ''} {'🕊️' if listing_a['is_purified'] else ''} {listing_a['details'] or ''}"
-            desc_b = f"{name_b} {'✨' if listing_b['is_shiny'] else ''} {'🕊️' if listing_b['is_purified'] else ''} {listing_b['details'] or ''}"
+            attrs_a = self._format_attributes(listing_a)
+            attrs_b = self._format_attributes(listing_b)
+
+            desc_a = f"{name_a} {attrs_a} {listing_a['details'] or ''}"
+            desc_b = f"{name_b} {attrs_b} {listing_b['details'] or ''}"
 
             # Add Account info
             acc_a = f"{listing_a['account_name']} (FC: {listing_a['friend_code']})"
@@ -146,7 +159,10 @@ class Listings(commands.Cog):
         except Exception as e:
             logger.error(f"Error creating trade channel: {e}")
 
-    async def create_listing_final(self, interaction: discord.Interaction, account_id: int, listing_type: str, pokemon_id: int, pokemon_name: str, shiny: bool, purified: bool, popis: str):
+    async def create_listing_final(self, interaction: discord.Interaction, account_id: int, listing_type: str, pokemon_id: int, pokemon_name: str,
+                                   shiny: bool, purified: bool,
+                                   dynamax: bool, gigantamax: bool, background: bool, adventure_effect: bool,
+                                   popis: str):
         try:
             listing_id = await database.add_listing(
                 user_id=interaction.user.id,
@@ -155,11 +171,19 @@ class Listings(commands.Cog):
                 pokemon_id=pokemon_id,
                 is_shiny=shiny,
                 is_purified=purified,
+                is_dynamax=dynamax,
+                is_gigantamax=gigantamax,
+                is_background=background,
+                is_adventure_effect=adventure_effect,
                 details=popis
             )
 
-            shiny_str = "✨ Shiny" if shiny else ""
-            purified_str = "🕊️ Purified" if purified else ""
+            attrs_map = {
+                'is_shiny': shiny, 'is_purified': purified,
+                'is_dynamax': dynamax, 'is_gigantamax': gigantamax,
+                'is_background': background, 'is_adventure_effect': adventure_effect
+            }
+            attrs_str = self._format_attributes(attrs_map)
             details_str = f"| {popis}" if popis else ""
             type_str = "Nabízím" if listing_type == 'HAVE' else "Hledám"
 
@@ -171,7 +195,7 @@ class Listings(commands.Cog):
             # Construct confirmation embed
             embed = discord.Embed(
                 title=f"✅ {type_str} vytvořena! (ID: {listing_id})",
-                description=f"{type_str}: {pokemon_name} {shiny_str} {purified_str} {details_str}",
+                description=f"{type_str}: {pokemon_name} {attrs_str} {details_str}",
                 color=discord.Color.green()
             )
             embed.add_field(name="Účet", value=f"{acc_name}", inline=False)
@@ -322,11 +346,10 @@ class Listings(commands.Cog):
 
                 p_name = POKEMON_IDS.get(p_id, f"Unknown #{p_id}")
 
-                shiny = "✨" if l['is_shiny'] else ""
-                purified = "🕊️" if l['is_purified'] else ""
+                attrs = self._format_attributes(l)
                 details = f"({l['details']})" if l['details'] else ""
 
-                line = f"**#{l_id}** [{acc_name}] | {p_name} {shiny} {purified} {details}\n"
+                line = f"**#{l_id}** [{acc_name}] | {p_name} {attrs} {details}\n"
 
                 if l_type == 'HAVE':
                     nabidky_text += line

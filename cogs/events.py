@@ -33,6 +33,36 @@ class Events(commands.Cog):
         count = await self._run_scrape()
         await interaction.followup.send(f"✅ Staženo/aktualizováno {count} eventů.")
 
+    @app_commands.command(name="upozorneni_udalosti", description="Přepnout zasílání upozornění na eventy (Toggle Event Alerts)")
+    async def toggle_event_alerts(self, interaction: discord.Interaction):
+        """Zapne nebo vypne roli pro upozornění na eventy."""
+        if not interaction.guild:
+            await interaction.response.send_message("❌ Tento příkaz funguje pouze na serveru.", ephemeral=True)
+            return
+
+        config = await database.get_guild_config(interaction.guild.id)
+        if not config or not config['event_role_id']:
+            await interaction.response.send_message("❌ Role pro upozornění není nastavena. Kontaktujte administrátora.", ephemeral=True)
+            return
+
+        role = interaction.guild.get_role(config['event_role_id'])
+        if not role:
+            await interaction.response.send_message("❌ Nastavená role již neexistuje.", ephemeral=True)
+            return
+
+        if role in interaction.user.roles:
+            try:
+                await interaction.user.remove_roles(role, reason="User toggled off event alerts")
+                await interaction.response.send_message(f"🔕 Role {role.mention} byla odebrána. Už nebudete dostávat upozornění.", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.response.send_message("❌ Nemám oprávnění spravovat tuto roli.", ephemeral=True)
+        else:
+            try:
+                await interaction.user.add_roles(role, reason="User toggled on event alerts")
+                await interaction.response.send_message(f"🔔 Role {role.mention} byla přidána. Budete dostávat upozornění.", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.response.send_message("❌ Nemám oprávnění spravovat tuto roli.", ephemeral=True)
+
     # --- Tasks ---
 
     @tasks.loop(time=datetime.time(hour=3, minute=0, tzinfo=TZ_PRAGUE))

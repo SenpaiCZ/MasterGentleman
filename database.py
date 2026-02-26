@@ -31,6 +31,10 @@ async def init_db():
                     pokemon_id INTEGER NOT NULL,
                     is_shiny BOOLEAN DEFAULT 0,
                     is_purified BOOLEAN DEFAULT 0,
+                    is_dynamax BOOLEAN DEFAULT 0,
+                    is_gigantamax BOOLEAN DEFAULT 0,
+                    is_background BOOLEAN DEFAULT 0,
+                    is_adventure_effect BOOLEAN DEFAULT 0,
                     details TEXT,
                     status TEXT DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE', 'PENDING', 'COMPLETED', 'CANCELLED')),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -86,6 +90,22 @@ async def init_db():
                     """)
                     await db.execute("DROP TABLE event_config")
                     logger.info("Migration complete.")
+
+            # Migration: Add new columns to listings if they don't exist
+            async with db.execute("PRAGMA table_info(listings)") as cursor:
+                columns = [row[1] for row in await cursor.fetchall()]
+
+                new_cols = [
+                    ("is_dynamax", "BOOLEAN DEFAULT 0"),
+                    ("is_gigantamax", "BOOLEAN DEFAULT 0"),
+                    ("is_background", "BOOLEAN DEFAULT 0"),
+                    ("is_adventure_effect", "BOOLEAN DEFAULT 0")
+                ]
+
+                for col_name, col_def in new_cols:
+                    if col_name not in columns:
+                        logger.info(f"Adding column {col_name} to listings table...")
+                        await db.execute(f"ALTER TABLE listings ADD COLUMN {col_name} {col_def}")
 
             await db.commit()
             logger.info("Database initialized successfully.")
@@ -145,12 +165,24 @@ async def get_account(account_id):
         async with db.execute("SELECT * FROM users WHERE id = ?", (account_id,)) as cursor:
             return await cursor.fetchone()
 
-async def add_listing(user_id, account_id, listing_type, pokemon_id, is_shiny=False, is_purified=False, details=None):
+async def add_listing(user_id, account_id, listing_type, pokemon_id,
+                     is_shiny=False, is_purified=False,
+                     is_dynamax=False, is_gigantamax=False,
+                     is_background=False, is_adventure_effect=False,
+                     details=None):
     async with aiosqlite.connect(DB_NAME) as db:
         cursor = await db.execute("""
-            INSERT INTO listings (user_id, account_id, listing_type, pokemon_id, is_shiny, is_purified, details)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, account_id, listing_type, pokemon_id, is_shiny, is_purified, details))
+            INSERT INTO listings (
+                user_id, account_id, listing_type, pokemon_id,
+                is_shiny, is_purified, is_dynamax, is_gigantamax,
+                is_background, is_adventure_effect, details
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user_id, account_id, listing_type, pokemon_id,
+            is_shiny, is_purified, is_dynamax, is_gigantamax,
+            is_background, is_adventure_effect, details
+        ))
         await db.commit()
         return cursor.lastrowid
 
@@ -235,7 +267,11 @@ async def get_expired_trades(days=7):
         async with db.execute(sql, (days,)) as cursor:
             return await cursor.fetchall()
 
-async def find_candidates(listing_type, pokemon_id, is_shiny, is_purified, exclude_user_id):
+async def find_candidates(listing_type, pokemon_id,
+                          is_shiny, is_purified,
+                          is_dynamax, is_gigantamax,
+                          is_background, is_adventure_effect,
+                          exclude_user_id):
     """
     Finds all ACTIVE listings that match the criteria, sorted by oldest first.
     listing_type: The type we are LOOKING for (e.g. if we have HAVE, we look for WANT).
@@ -251,11 +287,21 @@ async def find_candidates(listing_type, pokemon_id, is_shiny, is_purified, exclu
             AND l.pokemon_id = ?
             AND l.is_shiny = ?
             AND l.is_purified = ?
+            AND l.is_dynamax = ?
+            AND l.is_gigantamax = ?
+            AND l.is_background = ?
+            AND l.is_adventure_effect = ?
             AND l.user_id != ?
             AND l.status = 'ACTIVE'
             ORDER BY l.created_at ASC
         """
-        async with db.execute(sql, (listing_type, pokemon_id, is_shiny, is_purified, exclude_user_id)) as cursor:
+        async with db.execute(sql, (
+            listing_type, pokemon_id,
+            is_shiny, is_purified,
+            is_dynamax, is_gigantamax,
+            is_background, is_adventure_effect,
+            exclude_user_id
+        )) as cursor:
             return await cursor.fetchall()
 
 async def check_trade_history(listing_a_id, listing_b_id):
