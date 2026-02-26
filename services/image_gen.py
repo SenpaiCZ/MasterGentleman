@@ -118,15 +118,18 @@ class ImageGenerator:
 
         try:
             font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 24)
+            font_user = ImageFont.truetype("DejaVuSans-Bold.ttf", 20)
             font_text = ImageFont.truetype("DejaVuSans.ttf", 14)
             font_small = ImageFont.truetype("DejaVuSans.ttf", 10)
         except OSError:
             font_title = ImageFont.load_default()
+            font_user = ImageFont.load_default()
             font_text = ImageFont.load_default()
             font_small = ImageFont.load_default()
 
         draw.text((MARGIN, 20), title, font=font_title, fill=(255, 255, 255))
-        draw.text((IMG_W - MARGIN - 100, 25), user_name, font=font_text, fill=(200, 200, 200), anchor="ra")
+        # User name aligned to right, White color, Bold font
+        draw.text((IMG_W - MARGIN, 22), user_name, font=font_user, fill=(255, 255, 255), anchor="ra")
 
         for i, item in enumerate(listings):
             col = i % cols

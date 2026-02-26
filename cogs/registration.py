@@ -148,6 +148,13 @@ class TeamSelectView(ui.View):
         self.add_item(TeamSelect(friend_code, account_name, mode))
 
 class RegistrationModal(ui.Modal, title="Registrace Trenéra"):
+    account_name = ui.TextInput(
+        label="Jméno Trenéra (In-Game Name)",
+        placeholder="Váš přesný nick ve hře",
+        min_length=3,
+        max_length=20,
+        required=True
+    )
     friend_code = ui.TextInput(
         label="Friend Code (12 číslic)",
         placeholder="1234 5678 9012",
@@ -157,6 +164,7 @@ class RegistrationModal(ui.Modal, title="Registrace Trenéra"):
 
     async def on_submit(self, interaction: discord.Interaction):
         code = self.friend_code.value.replace(" ", "")
+        name = self.account_name.value.strip()
 
         if not code.isdigit() or len(code) != 12:
             await interaction.response.send_message("❌ Friend Code musí obsahovat přesně 12 číslic.", ephemeral=True)
@@ -164,12 +172,12 @@ class RegistrationModal(ui.Modal, title="Registrace Trenéra"):
 
         embed = discord.Embed(
             title="Krok 1: Vyberte Tým",
-            description=f"Friend Code **{code}** přijat.\nZa jaký tým hrajete?",
+            description=f"Trenér **{name}** (FC: {code}) registrován.\nZa jaký tým hrajete?",
             color=discord.Color.light_grey()
         )
         await interaction.response.send_message(
             embed=embed,
-            view=TeamSelectView(code, "Main", "REGISTER"),
+            view=TeamSelectView(code, name, "REGISTER"),
             ephemeral=True
         )
 
@@ -181,11 +189,11 @@ class AddAccountModal(ui.Modal, title="Přidat další účet"):
         max_length=15
     )
     account_name = ui.TextInput(
-        label="Název účtu (např. Alt 1)",
-        placeholder="Alt 1",
+        label="Jméno Trenéra (In-Game Name)",
+        placeholder="Váš přesný nick ve hře",
         min_length=1,
         max_length=20,
-        default="Alt"
+        required=True
     )
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -197,7 +205,8 @@ class AddAccountModal(ui.Modal, title="Přidat další účet"):
             return
 
         if not name:
-            name = "Alt"
+            await interaction.response.send_message("❌ Musíte zadat jméno účtu.", ephemeral=True)
+            return
 
         embed = discord.Embed(
             title="Krok 1: Vyberte Tým",
