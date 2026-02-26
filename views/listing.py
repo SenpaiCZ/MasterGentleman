@@ -265,23 +265,19 @@ class ListingDraftView(ui.View):
 
 
 class ListingManagementView(ui.View):
-    def __init__(self, listings, user_id, embed_callback=None):
+    def __init__(self, listings, callbacks):
+        # callbacks: dict with 'delete', 'edit_details', 'edit_all'
         super().__init__(timeout=180)
         self.listings = listings
-        self.user_id = user_id
-        self.embed_callback = embed_callback
+        self.callbacks = callbacks
         self.selected_listing_id = None
 
         options = []
-        # Sort by newest first (assuming listings is already sorted or we sort here)
-        # listings are rows, so dict access
-
         # Limit to 25
         for l in listings[:25]:
             p_name = POKEMON_IDS.get(l['pokemon_id'], f"#{l['pokemon_id']}")
             is_have = l['listing_type'] == 'HAVE'
             emoji = "📥" if is_have else "📤"
-            type_text = "Nabídka" if is_have else "Poptávka"
 
             desc_parts = []
             if l['is_shiny']: desc_parts.append("✨")
@@ -291,7 +287,7 @@ class ListingManagementView(ui.View):
             desc = " ".join(desc_parts)
             if not desc: desc = "Standard"
 
-            # Remove ID from label as requested
+            # No ID in label
             label = f"{emoji} {p_name}"
 
             options.append(discord.SelectOption(
@@ -304,7 +300,7 @@ class ListingManagementView(ui.View):
             options.append(discord.SelectOption(label="Žádné záznamy", value="none"))
 
         self.select_menu = ui.Select(
-            placeholder="Vyberte záznam pro smazání...",
+            placeholder="Vyberte záznam...",
             min_values=1,
             max_values=1,
             options=options,
@@ -313,76 +309,44 @@ class ListingManagementView(ui.View):
         self.select_menu.callback = self.on_select
         self.add_item(self.select_menu)
 
-        self.delete_btn = ui.Button(
-            label="Smazat",
-            style=discord.ButtonStyle.red,
-            emoji="🗑️",
-            disabled=True,
-            custom_id="delete_listing_btn"
-        )
-        self.delete_btn.callback = self.on_delete
-        self.add_item(self.delete_btn)
+        # Buttons
+        self.btn_edit_details = ui.Button(label="Upravit popis", emoji="📝", style=discord.ButtonStyle.secondary, disabled=True, row=1)
+        self.btn_edit_details.callback = self.on_edit_details
+        self.add_item(self.btn_edit_details)
+
+        self.btn_edit_all = ui.Button(label="Upravit vše", emoji="✏️", style=discord.ButtonStyle.secondary, disabled=True, row=1)
+        self.btn_edit_all.callback = self.on_edit_all
+        self.add_item(self.btn_edit_all)
+
+        self.btn_delete = ui.Button(label="Smazat", emoji="🗑️", style=discord.ButtonStyle.red, disabled=True, row=1)
+        self.btn_delete.callback = self.on_delete
+        self.add_item(self.btn_delete)
 
     async def on_select(self, interaction: discord.Interaction):
         if self.select_menu.values[0] == "none":
             return
 
         self.selected_listing_id = int(self.select_menu.values[0])
-        self.delete_btn.disabled = False
+        self.btn_edit_details.disabled = False
+        self.btn_edit_all.disabled = False
+        self.btn_delete.disabled = False
         await interaction.response.edit_message(view=self)
 
     async def on_delete(self, interaction: discord.Interaction):
-        if not self.selected_listing_id:
-            return
+        if self.selected_listing_id and self.callbacks.get('delete'):
+            await self.callbacks['delete'](interaction, self.selected_listing_id, self)
 
-        try:
-            # Check for PENDING trade status
+    async def on_edit_details(self, interaction: discord.Interaction):
+        if self.selected_listing_id and self.callbacks.get('edit_details'):
+            # Find current details
             listing = next((l for l in self.listings if l['id'] == self.selected_listing_id), None)
-            if listing and listing['status'] == 'PENDING':
-                await interaction.response.send_message("⛔ Nemůžete smazat nabídku, která je součástí probíhajícího obchodu.", ephemeral=True)
-                return
+            current_details = listing['details'] if listing else ""
 
-            await database.delete_listing(self.selected_listing_id)
+            async def modal_callback(modal_interaction, new_details):
+                await self.callbacks['edit_details'](modal_interaction, self.selected_listing_id, new_details, self)
 
-            # Remove from local list
-            self.listings = [l for l in self.listings if l['id'] != self.selected_listing_id]
+            await interaction.response.send_modal(ListingDescriptionModal(current_details, modal_callback))
 
-            # Reconstruct options
-            new_options = []
-            for l in self.listings[:25]:
-                p_name = POKEMON_IDS.get(l['pokemon_id'], f"#{l['pokemon_id']}")
-                is_have = l['listing_type'] == 'HAVE'
-                emoji = "📥" if is_have else "📤"
-
-                desc_parts = []
-                if l['is_shiny']: desc_parts.append("✨")
-                if l.get('is_mirror'): desc_parts.append("🪞")
-                if l['account_name'] and l['account_name'] != "Main": desc_parts.append(f"👤 {l['account_name']}")
-                desc = " ".join(desc_parts) or "Standard"
-
-                label = f"{emoji} {p_name}"
-                new_options.append(discord.SelectOption(
-                    label=label[:100],
-                    value=str(l['id']),
-                    description=desc[:100]
-                ))
-
-            if not new_options:
-                self.select_menu.options = [discord.SelectOption(label="Žádné záznamy", value="none")]
-                self.select_menu.disabled = True
-            else:
-                self.select_menu.options = new_options
-
-            self.delete_btn.disabled = True
-            self.selected_listing_id = None
-
-            # We also need to update the View to show changes
-            embed = None
-            if self.embed_callback:
-                embed = self.embed_callback(self.listings)
-
-            await interaction.response.edit_message(content=f"✅ Záznam byl úspěšně smazán.", embed=embed, view=self)
-
-        except Exception as e:
-            logger.error(f"Error deleting listing via view: {e}")
-            await interaction.response.send_message("❌ Chyba při mazání.", ephemeral=True)
+    async def on_edit_all(self, interaction: discord.Interaction):
+        if self.selected_listing_id and self.callbacks.get('edit_all'):
+            await self.callbacks['edit_all'](interaction, self.selected_listing_id, self)

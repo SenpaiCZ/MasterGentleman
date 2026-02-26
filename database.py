@@ -37,6 +37,9 @@ async def init_db():
                     is_adventure_effect BOOLEAN DEFAULT 0,
                     details TEXT,
                     status TEXT DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE', 'PENDING', 'COMPLETED', 'CANCELLED')),
+                    message_id INTEGER,
+                    channel_id INTEGER,
+                    guild_id INTEGER,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (account_id) REFERENCES users (id)
                 )
@@ -76,7 +79,22 @@ async def init_db():
                     event_channel_id INTEGER,
                     event_role_id INTEGER,
                     have_channel_id INTEGER,
-                    want_channel_id INTEGER
+                    want_channel_id INTEGER,
+                    trade_category_id INTEGER
+                )
+            """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS autodelete_config (
+                    channel_id INTEGER PRIMARY KEY,
+                    guild_id INTEGER,
+                    duration_minutes INTEGER
+                )
+            """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS user_departures (
+                    user_id INTEGER PRIMARY KEY,
+                    guild_id INTEGER,
+                    departed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
@@ -100,13 +118,23 @@ async def init_db():
                     ("is_gigantamax", "BOOLEAN DEFAULT 0"),
                     ("is_background", "BOOLEAN DEFAULT 0"),
                     ("is_adventure_effect", "BOOLEAN DEFAULT 0"),
-                    ("is_mirror", "BOOLEAN DEFAULT 0")
+                    ("is_mirror", "BOOLEAN DEFAULT 0"),
+                    ("message_id", "INTEGER"),
+                    ("channel_id", "INTEGER"),
+                    ("guild_id", "INTEGER")
                 ]
 
                 for col_name, col_def in new_cols:
                     if col_name not in columns:
                         logger.info(f"Adding column {col_name} to listings table...")
                         await db.execute(f"ALTER TABLE listings ADD COLUMN {col_name} {col_def}")
+
+            # Migration: Add trade_category_id to guild_config
+            async with db.execute("PRAGMA table_info(guild_config)") as cursor:
+                columns = [row[1] for row in await cursor.fetchall()]
+                if "trade_category_id" not in columns:
+                    logger.info("Adding column trade_category_id to guild_config table...")
+                    await db.execute("ALTER TABLE guild_config ADD COLUMN trade_category_id INTEGER")
 
             await db.commit()
             logger.info("Database initialized successfully.")
@@ -171,22 +199,35 @@ async def add_listing(user_id, account_id, listing_type, pokemon_id,
                      is_dynamax=False, is_gigantamax=False,
                      is_background=False, is_adventure_effect=False,
                      is_mirror=False,
-                     details=None):
+                     details=None,
+                     guild_id=None):
     async with aiosqlite.connect(DB_NAME) as db:
         cursor = await db.execute("""
             INSERT INTO listings (
                 user_id, account_id, listing_type, pokemon_id,
                 is_shiny, is_purified, is_dynamax, is_gigantamax,
-                is_background, is_adventure_effect, is_mirror, details
+                is_background, is_adventure_effect, is_mirror, details,
+                guild_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             user_id, account_id, listing_type, pokemon_id,
             is_shiny, is_purified, is_dynamax, is_gigantamax,
-            is_background, is_adventure_effect, is_mirror, details
+            is_background, is_adventure_effect, is_mirror, details,
+            guild_id
         ))
         await db.commit()
         return cursor.lastrowid
+
+async def update_listing_message(listing_id, message_id, channel_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE listings SET message_id = ?, channel_id = ? WHERE id = ?", (message_id, channel_id, listing_id))
+        await db.commit()
+
+async def update_listing_details(listing_id, details):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE listings SET details = ? WHERE id = ?", (details, listing_id))
+        await db.commit()
 
 async def get_listing(listing_id):
     async with aiosqlite.connect(DB_NAME) as db:
@@ -377,7 +418,7 @@ async def mark_event_notified(event_id, notification_type):
         await db.commit()
 
 async def set_guild_config(guild_id, **kwargs):
-    allowed_fields = {'event_channel_id', 'event_role_id', 'have_channel_id', 'want_channel_id'}
+    allowed_fields = {'event_channel_id', 'event_role_id', 'have_channel_id', 'want_channel_id', 'trade_category_id'}
     updates = []
     params = []
 
@@ -413,6 +454,48 @@ async def get_guild_config(guild_id):
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM guild_config WHERE guild_id = ?", (guild_id,)) as cursor:
             return await cursor.fetchone()
+
+# Autodelete Config
+async def set_autodelete_config(channel_id, guild_id, duration_minutes):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("""
+            INSERT INTO autodelete_config (channel_id, guild_id, duration_minutes)
+            VALUES (?, ?, ?)
+            ON CONFLICT(channel_id) DO UPDATE SET duration_minutes = ?
+        """, (channel_id, guild_id, duration_minutes, duration_minutes))
+        await db.commit()
+
+async def get_autodelete_configs():
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM autodelete_config") as cursor:
+            return await cursor.fetchall()
+
+async def delete_autodelete_config(channel_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("DELETE FROM autodelete_config WHERE channel_id = ?", (channel_id,))
+        await db.commit()
+
+# User Departures
+async def add_user_departure(user_id, guild_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("""
+            INSERT OR REPLACE INTO user_departures (user_id, guild_id, departed_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+        """, (user_id, guild_id))
+        await db.commit()
+
+async def remove_user_departure(user_id):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("DELETE FROM user_departures WHERE user_id = ?", (user_id,))
+        await db.commit()
+
+async def get_departed_users(hours=24):
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        sql = "SELECT * FROM user_departures WHERE departed_at < datetime('now', '-' || ? || ' hours')"
+        async with db.execute(sql, (hours,)) as cursor:
+            return await cursor.fetchall()
 
 # For debugging/verification
 if __name__ == "__main__":
