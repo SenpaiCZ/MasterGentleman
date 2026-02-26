@@ -47,6 +47,7 @@ class Listings(commands.Cog):
         if l.get('is_gigantamax'): attrs.append("Giga")
         if l.get('is_background'): attrs.append("🌍")
         if l.get('is_adventure_effect'): attrs.append("🪄")
+        if l.get('is_mirror'): attrs.append("🪞")
         return " ".join(attrs)
 
     def _create_listings_embed(self, listings, user_team_color):
@@ -72,7 +73,8 @@ class Listings(commands.Cog):
             details = f"({l['details']})" if l['details'] else ""
 
             # Truncate if too long (Discord limits)
-            line = f"**#{l_id}** [{acc_name}] | {p_name} {attrs} {details}\n"
+            # User requested ID removal from view
+            line = f"[{acc_name}] | {p_name} {attrs} {details}\n"
 
             if l_type == 'HAVE':
                 if len(nabidky_text) + len(line) < 1000:
@@ -201,6 +203,7 @@ class Listings(commands.Cog):
     async def create_listing_final(self, interaction: discord.Interaction, account_id: int, listing_type: str, pokemon_id: int, pokemon_name: str,
                                    shiny: bool, purified: bool,
                                    dynamax: bool, gigantamax: bool, background: bool, adventure_effect: bool,
+                                   is_mirror: bool,
                                    popis: str):
         try:
             listing_id = await database.add_listing(
@@ -214,17 +217,21 @@ class Listings(commands.Cog):
                 is_gigantamax=gigantamax,
                 is_background=background,
                 is_adventure_effect=adventure_effect,
+                is_mirror=is_mirror,
                 details=popis
             )
 
             attrs_map = {
                 'is_shiny': shiny, 'is_purified': purified,
                 'is_dynamax': dynamax, 'is_gigantamax': gigantamax,
-                'is_background': background, 'is_adventure_effect': adventure_effect
+                'is_background': background, 'is_adventure_effect': adventure_effect,
+                'is_mirror': is_mirror
             }
             attrs_str = self._format_attributes(attrs_map)
             details_str = f"| {popis}" if popis else ""
-            type_str = "Nabízím" if listing_type == 'HAVE' else "Hledám"
+
+            # Updated terminology
+            type_str = "Nabídka" if listing_type == 'HAVE' else "Poptávka"
 
             # Fetch account name for confirmation
             account = await database.get_account(account_id)
@@ -232,8 +239,9 @@ class Listings(commands.Cog):
             friend_code = account['friend_code'] if account else "Unknown"
 
             # Construct confirmation embed
+            # Removed ID from title
             embed = discord.Embed(
-                title=f"✅ {type_str} vytvořena! (ID: {listing_id})",
+                title=f"✅ {type_str} vytvořena!",
                 description=f"{type_str}: {pokemon_name} {attrs_str} {details_str}",
                 color=discord.Color.green()
             )
@@ -270,7 +278,8 @@ class Listings(commands.Cog):
             msg_loc = ""
             if target_channel:
                 try:
-                    await target_channel.send(embed=embed, view=view)
+                    # Added user mention to content
+                    await target_channel.send(content=interaction.user.mention, embed=embed, view=view)
                     if target_channel != interaction.channel:
                         msg_loc = f" do kanálu {target_channel.mention}"
                 except Exception as e:
@@ -278,7 +287,7 @@ class Listings(commands.Cog):
                     # Try fallback to current channel if different
                     if target_channel != interaction.channel and interaction.channel:
                         try:
-                            await interaction.channel.send(embed=embed, view=view)
+                            await interaction.channel.send(content=interaction.user.mention, embed=embed, view=view)
                         except:
                             pass
             else:
@@ -400,7 +409,7 @@ class Listings(commands.Cog):
                 return
 
             await database.delete_listing(id_zaznamu)
-            await interaction.response.send_message(f"🗑️ Záznam #{id_zaznamu} byl smazán.", ephemeral=True)
+            await interaction.response.send_message(f"🗑️ Záznam byl smazán.", ephemeral=True)
             logger.info(f"User {interaction.user.id} deleted listing {id_zaznamu}")
 
         except Exception as e:

@@ -16,7 +16,12 @@ async def find_match(new_listing_id):
         if not new_listing:
             return None, None
 
-        target_type = 'WANT' if new_listing['listing_type'] == 'HAVE' else 'HAVE'
+        # Determine target type and mirror status
+        is_mirror = new_listing['is_mirror']
+        if is_mirror:
+            target_type = new_listing['listing_type'] # Mirror matches same type (HAVE<->HAVE)
+        else:
+            target_type = 'WANT' if new_listing['listing_type'] == 'HAVE' else 'HAVE'
 
         candidates = await database.find_candidates(
             listing_type=target_type,
@@ -27,6 +32,7 @@ async def find_match(new_listing_id):
             is_gigantamax=new_listing['is_gigantamax'],
             is_background=new_listing['is_background'],
             is_adventure_effect=new_listing['is_adventure_effect'],
+            is_mirror=is_mirror,
             exclude_user_id=new_listing['user_id']
         )
 

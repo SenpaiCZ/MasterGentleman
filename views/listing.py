@@ -42,6 +42,7 @@ class ListingDraftView(ui.View):
         self.is_gigantamax = False
         self.is_background = False
         self.is_adventure_effect = False
+        self.is_mirror = False
         self.details = initial_details
 
         # Default to main account or first account
@@ -75,6 +76,7 @@ class ListingDraftView(ui.View):
 
         # Row 1: Advanced Attributes & Details
         self.add_item(self._create_button("Adv", "🪄", self.is_adventure_effect, "toggle_adv", self.toggle_adv, 1))
+        self.add_item(self._create_button("Mirror", "🪞", self.is_mirror, "toggle_mirror", self.toggle_mirror, 1))
 
         btn_details = ui.Button(
             label="Popis",
@@ -146,6 +148,7 @@ class ListingDraftView(ui.View):
         if self.is_gigantamax: status_parts.append("**Giga**")
         if self.is_background: status_parts.append("🌍 **BG**")
         if self.is_adventure_effect: status_parts.append("🪄 **Adv**")
+        if self.is_mirror: status_parts.append("🪞 **Mirror**")
 
         if status_parts:
             desc += f"**Stav:** {' | '.join(status_parts)}\n"
@@ -205,6 +208,10 @@ class ListingDraftView(ui.View):
         self.is_adventure_effect = not self.is_adventure_effect
         await self.update_view(interaction)
 
+    async def toggle_mirror(self, interaction: discord.Interaction):
+        self.is_mirror = not self.is_mirror
+        await self.update_view(interaction)
+
     async def open_details_modal(self, interaction: discord.Interaction):
         # Callback for the modal to update the view
         async def modal_callback(modal_interaction, new_details):
@@ -248,6 +255,7 @@ class ListingDraftView(ui.View):
                 self.is_gigantamax,
                 self.is_background,
                 self.is_adventure_effect,
+                self.is_mirror,
                 self.details
             )
 
@@ -271,16 +279,20 @@ class ListingManagementView(ui.View):
         # Limit to 25
         for l in listings[:25]:
             p_name = POKEMON_IDS.get(l['pokemon_id'], f"#{l['pokemon_id']}")
-            emoji = "📥" if l['listing_type'] == 'HAVE' else "📤"
+            is_have = l['listing_type'] == 'HAVE'
+            emoji = "📥" if is_have else "📤"
+            type_text = "Nabídka" if is_have else "Poptávka"
 
             desc_parts = []
             if l['is_shiny']: desc_parts.append("✨")
+            if l.get('is_mirror'): desc_parts.append("🪞")
             if l['account_name'] and l['account_name'] != "Main": desc_parts.append(f"👤 {l['account_name']}")
 
             desc = " ".join(desc_parts)
             if not desc: desc = "Standard"
 
-            label = f"{emoji} {p_name} (#{l['id']})"
+            # Remove ID from label as requested
+            label = f"{emoji} {p_name}"
 
             options.append(discord.SelectOption(
                 label=label[:100],
@@ -339,14 +351,16 @@ class ListingManagementView(ui.View):
             new_options = []
             for l in self.listings[:25]:
                 p_name = POKEMON_IDS.get(l['pokemon_id'], f"#{l['pokemon_id']}")
-                emoji = "📥" if l['listing_type'] == 'HAVE' else "📤"
+                is_have = l['listing_type'] == 'HAVE'
+                emoji = "📥" if is_have else "📤"
 
                 desc_parts = []
                 if l['is_shiny']: desc_parts.append("✨")
+                if l.get('is_mirror'): desc_parts.append("🪞")
                 if l['account_name'] and l['account_name'] != "Main": desc_parts.append(f"👤 {l['account_name']}")
                 desc = " ".join(desc_parts) or "Standard"
 
-                label = f"{emoji} {p_name} (#{l['id']})"
+                label = f"{emoji} {p_name}"
                 new_options.append(discord.SelectOption(
                     label=label[:100],
                     value=str(l['id']),

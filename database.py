@@ -99,7 +99,8 @@ async def init_db():
                     ("is_dynamax", "BOOLEAN DEFAULT 0"),
                     ("is_gigantamax", "BOOLEAN DEFAULT 0"),
                     ("is_background", "BOOLEAN DEFAULT 0"),
-                    ("is_adventure_effect", "BOOLEAN DEFAULT 0")
+                    ("is_adventure_effect", "BOOLEAN DEFAULT 0"),
+                    ("is_mirror", "BOOLEAN DEFAULT 0")
                 ]
 
                 for col_name, col_def in new_cols:
@@ -169,19 +170,20 @@ async def add_listing(user_id, account_id, listing_type, pokemon_id,
                      is_shiny=False, is_purified=False,
                      is_dynamax=False, is_gigantamax=False,
                      is_background=False, is_adventure_effect=False,
+                     is_mirror=False,
                      details=None):
     async with aiosqlite.connect(DB_NAME) as db:
         cursor = await db.execute("""
             INSERT INTO listings (
                 user_id, account_id, listing_type, pokemon_id,
                 is_shiny, is_purified, is_dynamax, is_gigantamax,
-                is_background, is_adventure_effect, details
+                is_background, is_adventure_effect, is_mirror, details
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             user_id, account_id, listing_type, pokemon_id,
             is_shiny, is_purified, is_dynamax, is_gigantamax,
-            is_background, is_adventure_effect, details
+            is_background, is_adventure_effect, is_mirror, details
         ))
         await db.commit()
         return cursor.lastrowid
@@ -271,11 +273,14 @@ async def find_candidates(listing_type, pokemon_id,
                           is_shiny, is_purified,
                           is_dynamax, is_gigantamax,
                           is_background, is_adventure_effect,
+                          is_mirror,
                           exclude_user_id):
     """
     Finds all ACTIVE listings that match the criteria, sorted by oldest first.
     listing_type: The type we are LOOKING for (e.g. if we have HAVE, we look for WANT).
     exclude_user_id: The Discord User ID to exclude (so we don't match our own alts).
+    is_mirror: If True, we look for listings that ALSO have is_mirror=True.
+               If False, we look for listings that have is_mirror=False (to protect mirror users).
     """
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
@@ -291,6 +296,7 @@ async def find_candidates(listing_type, pokemon_id,
             AND l.is_gigantamax = ?
             AND l.is_background = ?
             AND l.is_adventure_effect = ?
+            AND l.is_mirror = ?
             AND l.user_id != ?
             AND l.status = 'ACTIVE'
             ORDER BY l.created_at ASC
@@ -300,6 +306,7 @@ async def find_candidates(listing_type, pokemon_id,
             is_shiny, is_purified,
             is_dynamax, is_gigantamax,
             is_background, is_adventure_effect,
+            is_mirror,
             exclude_user_id
         )) as cursor:
             return await cursor.fetchall()
