@@ -268,7 +268,7 @@ class ListingManagementView(ui.View):
     def __init__(self, listings, callbacks):
         # callbacks: dict with 'delete', 'edit_details', 'edit_all'
         super().__init__(timeout=180)
-        self.listings = listings
+        self.listings = [dict(l) for l in listings]
         self.callbacks = callbacks
         self.selected_listing_id = None
 

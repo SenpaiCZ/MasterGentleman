@@ -33,6 +33,7 @@ class Listings(commands.Cog):
 
     def _format_attributes(self, l):
         # l can be a dict or Row.
+        l = dict(l)
         attrs = []
         if l.get('is_shiny'): attrs.append("✨")
         if l.get('is_purified'): attrs.append("🕊️")
