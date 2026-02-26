@@ -67,14 +67,28 @@ async def init_db():
                 CREATE INDEX IF NOT EXISTS idx_start_time ON events (start_time)
             """)
             await db.execute("""
-                CREATE TABLE IF NOT EXISTS event_config (
+                CREATE TABLE IF NOT EXISTS guild_config (
                     guild_id INTEGER PRIMARY KEY,
-                    channel_id INTEGER,
-                    role_id INTEGER
+                    event_channel_id INTEGER,
+                    event_role_id INTEGER,
+                    have_channel_id INTEGER,
+                    want_channel_id INTEGER
                 )
             """)
+
+            # Migration: Check if event_config exists
+            async with db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='event_config'") as cursor:
+                if await cursor.fetchone():
+                    logger.info("Migrating event_config to guild_config...")
+                    await db.execute("""
+                        INSERT OR IGNORE INTO guild_config (guild_id, event_channel_id, event_role_id)
+                        SELECT guild_id, channel_id, role_id FROM event_config
+                    """)
+                    await db.execute("DROP TABLE event_config")
+                    logger.info("Migration complete.")
+
             await db.commit()
-            logger.info("Database initialized successfully (fresh start).")
+            logger.info("Database initialized successfully.")
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
         raise
@@ -309,26 +323,42 @@ async def mark_event_notified(event_id, notification_type):
         await db.execute(f"UPDATE events SET {col_name} = 1 WHERE id = ?", (event_id,))
         await db.commit()
 
-async def set_event_config(guild_id, channel_id=None, role_id=None):
+async def set_guild_config(guild_id, **kwargs):
+    allowed_fields = {'event_channel_id', 'event_role_id', 'have_channel_id', 'want_channel_id'}
+    updates = []
+    params = []
+
+    for key, value in kwargs.items():
+        if key in allowed_fields:
+            updates.append(f"{key} = ?")
+            params.append(value)
+
+    if not updates:
+        return
+
     async with aiosqlite.connect(DB_NAME) as db:
-        # Upsert
-        async with db.execute("SELECT * FROM event_config WHERE guild_id = ?", (guild_id,)) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                # Update provided fields
-                if channel_id:
-                    await db.execute("UPDATE event_config SET channel_id = ? WHERE guild_id = ?", (channel_id, guild_id))
-                if role_id:
-                    await db.execute("UPDATE event_config SET role_id = ? WHERE guild_id = ?", (role_id, guild_id))
-            else:
-                await db.execute("INSERT INTO event_config (guild_id, channel_id, role_id) VALUES (?, ?, ?)",
-                                 (guild_id, channel_id, role_id))
+        # Upsert logic
+        async with db.execute("SELECT 1 FROM guild_config WHERE guild_id = ?", (guild_id,)) as cursor:
+            exists = await cursor.fetchone()
+
+        if exists:
+            params.append(guild_id)
+            sql = f"UPDATE guild_config SET {', '.join(updates)} WHERE guild_id = ?"
+            await db.execute(sql, tuple(params))
+        else:
+            # For insert, we need to handle specific columns
+            # This is a bit tricky with dynamic kwargs, so we can do INSERT OR IGNORE then UPDATE
+            await db.execute("INSERT OR IGNORE INTO guild_config (guild_id) VALUES (?)", (guild_id,))
+            params.append(guild_id)
+            sql = f"UPDATE guild_config SET {', '.join(updates)} WHERE guild_id = ?"
+            await db.execute(sql, tuple(params))
+
         await db.commit()
 
-async def get_event_config(guild_id):
+async def get_guild_config(guild_id):
     async with aiosqlite.connect(DB_NAME) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM event_config WHERE guild_id = ?", (guild_id,)) as cursor:
+        async with db.execute("SELECT * FROM guild_config WHERE guild_id = ?", (guild_id,)) as cursor:
             return await cursor.fetchone()
 
 # For debugging/verification

@@ -26,41 +26,7 @@ class Events(commands.Cog):
 
     # --- Commands ---
 
-    events_group = app_commands.Group(name="nastaveni_udalosti", description="Nastavení upozornění na Pokémon GO eventy")
-
-    @events_group.command(name="kanal", description="Nastavit kanál pro upozornění")
-    @app_commands.describe(channel="Textový kanál pro zprávy")
-    @commands.has_permissions(administrator=True)
-    async def set_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        await database.set_event_config(interaction.guild_id, channel_id=channel.id)
-        await interaction.response.send_message(f"✅ Kanál pro upozornění nastaven na: {channel.mention}", ephemeral=True)
-
-    @events_group.command(name="role", description="Nastavit roli, která bude označena")
-    @app_commands.describe(role="Role pro označení (ping)")
-    @commands.has_permissions(administrator=True)
-    async def set_role(self, interaction: discord.Interaction, role: discord.Role):
-        await database.set_event_config(interaction.guild_id, role_id=role.id)
-        await interaction.response.send_message(f"✅ Role pro označení nastavena na: {role.mention}", ephemeral=True)
-
-    @events_group.command(name="stav", description="Zobrazit aktuální nastavení")
-    @commands.has_permissions(administrator=True)
-    async def status(self, interaction: discord.Interaction):
-        config = await database.get_event_config(interaction.guild_id)
-        if not config:
-            await interaction.response.send_message("❌ Nastavení zatím neexistuje.", ephemeral=True)
-            return
-
-        channel = interaction.guild.get_channel(config['channel_id']) if config['channel_id'] else None
-        role = interaction.guild.get_role(config['role_id']) if config['role_id'] else None
-
-        msg = (
-            f"**Nastavení Udalostí:**\n"
-            f"📢 Kanál: {channel.mention if channel else 'Nenastaveno'}\n"
-            f"🔔 Role: {role.mention if role else 'Nenastaveno'}"
-        )
-        await interaction.response.send_message(msg, ephemeral=True)
-
-    @events_group.command(name="scrape", description="Manuálně spustit stahování eventů (Admin)")
+    @app_commands.command(name="scrape_events", description="Manuálně spustit stahování eventů (Admin)")
     @commands.has_permissions(administrator=True)
     async def manual_scrape(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -127,19 +93,19 @@ class Events(commands.Cog):
 
     async def _send_notification(self, event, notif_type):
         # We need to find which guilds to notify. Assuming single guild or iteration.
-        # But `event_config` is by guild_id.
+        # But `guild_config` is by guild_id.
         # We don't have a list of guilds in DB, but we can iterate over bot.guilds
 
         for guild in self.bot.guilds:
-            config = await database.get_event_config(guild.id)
-            if not config or not config['channel_id']:
+            config = await database.get_guild_config(guild.id)
+            if not config or not config['event_channel_id']:
                 continue
 
-            channel = guild.get_channel(config['channel_id'])
+            channel = guild.get_channel(config['event_channel_id'])
             if not channel:
                 continue
 
-            role = guild.get_role(config['role_id']) if config['role_id'] else None
+            role = guild.get_role(config['event_role_id']) if config['event_role_id'] else None
             role_mention = role.mention if role else ""
 
             # Embed
@@ -242,16 +208,16 @@ class Events(commands.Cog):
 
         # Send to all configured channels
         for guild in self.bot.guilds:
-            config = await database.get_event_config(guild.id)
-            if not config or not config['channel_id']:
+            config = await database.get_guild_config(guild.id)
+            if not config or not config['event_channel_id']:
                 continue
 
-            channel = guild.get_channel(config['channel_id'])
+            channel = guild.get_channel(config['event_channel_id'])
             if not channel:
                 continue
 
             # Maybe ping role here too?
-            role = guild.get_role(config['role_id']) if config['role_id'] else None
+            role = guild.get_role(config['event_role_id']) if config['event_role_id'] else None
             role_mention = role.mention if role else ""
 
             try:
