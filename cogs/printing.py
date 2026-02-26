@@ -54,7 +54,7 @@ class Printing(commands.Cog):
             listings = await database.get_account_listings(account['id'])
 
             # Filter by type
-            filtered_listings = [l for l in listings if l['listing_type'] == typ]
+            filtered_listings = [{k: l[k] for k in l.keys()} for l in listings if l['listing_type'] == typ]
 
             if not filtered_listings:
                 await interaction.followup.send(f"❌ Účet **{account['account_name']}** nemá žádné záznamy typu '{typ}'.", ephemeral=True)
