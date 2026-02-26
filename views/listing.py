@@ -274,7 +274,7 @@ class ListingManagementView(ui.View):
 
         options = []
         # Limit to 25
-        for l in listings[:25]:
+        for l in self.listings[:25]:
             p_name = POKEMON_IDS.get(l['pokemon_id'], f"#{l['pokemon_id']}")
             is_have = l['listing_type'] == 'HAVE'
             emoji = "📥" if is_have else "📤"
