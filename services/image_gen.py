@@ -92,6 +92,31 @@ class ImageGenerator:
             points.append((x + r * math.sin(angle), y - r * math.cos(angle)))
         draw.polygon(points, fill=fill)
 
+    def _draw_badge(self, draw, text, center_xy, bg_color, text_color, font):
+        """Draws a small pill/badge with text."""
+        x, y = center_xy
+
+        # Calculate text size
+        bbox = draw.textbbox((0,0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+
+        # Badge size (padding)
+        pad_x = 4
+        pad_y = 2
+        w = tw + pad_x * 2
+        h = th + pad_y * 2
+
+        x0, y0 = x - w/2, y - h/2
+        x1, y1 = x + w/2, y + h/2
+
+        draw.rectangle([x0, y0, x1, y1], fill=bg_color)
+
+        # Center text
+        tx = x - tw/2
+        ty = y - th/2 - 1 # visual adjustment
+        draw.text((tx, ty), text, font=font, fill=text_color)
+
     def _generate_card_sync(self, listings, title, user_name, team_color_rgb):
         """Sync implementation of image generation."""
         num_items = len(listings)
@@ -121,11 +146,14 @@ class ImageGenerator:
             font_user = ImageFont.truetype("DejaVuSans-Bold.ttf", 20)
             font_text = ImageFont.truetype("DejaVuSans.ttf", 14)
             font_small = ImageFont.truetype("DejaVuSans.ttf", 10)
+            # Make a slightly smaller font for badges if needed, but 10 is usually ok
+            font_badge = ImageFont.truetype("DejaVuSans-Bold.ttf", 10)
         except OSError:
             font_title = ImageFont.load_default()
             font_user = ImageFont.load_default()
             font_text = ImageFont.load_default()
             font_small = ImageFont.load_default()
+            font_badge = ImageFont.load_default()
 
         draw.text((MARGIN, 20), title, font=font_title, fill=(255, 255, 255))
         # User name aligned to right, White color, Bold font
@@ -143,6 +171,10 @@ class ImageGenerator:
             pokemon_id = item['pokemon_id']
             is_shiny = item['is_shiny']
             is_purified = item['is_purified']
+            is_dynamax = item.get('is_dynamax', False)
+            is_gigantamax = item.get('is_gigantamax', False)
+            is_background = item.get('is_background', False)
+            is_adventure_effect = item.get('is_adventure_effect', False)
 
             sprite = self._get_sprite_sync(pokemon_id, is_shiny)
             if sprite:
@@ -172,16 +204,35 @@ class ImageGenerator:
             ty2 = y + 130
             draw.text((tx2, ty2), id_text, font=font_small, fill=(150, 150, 150))
 
+            # --- Status Indicators ---
+
+            # Shiny: Top Right
             if is_shiny:
                 cx = x + CELL_W - 15
                 cy = y + 15
                 self._draw_star(draw, (cx, cy), 8, fill=(255, 215, 0))
 
+            # Purified: Top Left
             if is_purified:
                 cx = x + 15
                 cy = y + 15
                 draw.ellipse([(cx-6, cy-6), (cx+6, cy+6)], fill=(200, 200, 255))
                 draw.text((cx-3, cy-5), "P", font=font_small, fill=(0, 0, 0))
+
+            # Dynamax / Gigantamax: Top Center
+            # Priority to Gigantamax if both set (usually Gmax implies Dmax)
+            if is_gigantamax:
+                self._draw_badge(draw, "Giga", (x + CELL_W/2, y + 15), (139, 0, 0), (255, 255, 255), font_badge)
+            elif is_dynamax:
+                self._draw_badge(draw, "Dyna", (x + CELL_W/2, y + 15), (255, 20, 147), (255, 255, 255), font_badge)
+
+            # Background: Bottom Right (above text)
+            if is_background:
+                self._draw_badge(draw, "BG", (x + CELL_W - 20, y + 95), (0, 100, 0), (255, 255, 255), font_badge)
+
+            # Adventure Effect: Bottom Left (above text)
+            if is_adventure_effect:
+                self._draw_badge(draw, "Adv", (x + 20, y + 95), (75, 0, 130), (255, 255, 255), font_badge)
 
         out = BytesIO()
         img.save(out, format='PNG', optimize=True)

@@ -32,7 +32,10 @@ REGIONS = [
 async def save_user_registration(interaction, friend_code, team, region, account_name, is_main):
     """Helper to save user and update roles."""
     # Show loading state first
-    await interaction.response.edit_message(content="⏳ Ukládám údaje...", view=None, embed=None)
+    if not interaction.response.is_done():
+        await interaction.response.edit_message(content="⏳ Ukládám údaje...", view=None, embed=None)
+    else:
+        await interaction.edit_original_response(content="⏳ Ukládám údaje...", view=None, embed=None)
 
     try:
         await database.add_user_account(
@@ -84,6 +87,44 @@ class AccountTypeView(ui.View):
         super().__init__()
         self.add_item(AccountTypeSelect(friend_code, team, region, account_name))
 
+class EventNotificationView(ui.View):
+    def __init__(self, friend_code, team, region, account_name):
+        super().__init__()
+        self.friend_code = friend_code
+        self.team = team
+        self.region = region
+        self.account_name = account_name
+
+    @ui.button(label="Ano, chci upozornění", style=discord.ButtonStyle.success, emoji="🔔")
+    async def yes_notifications(self, interaction: discord.Interaction, button: ui.Button):
+        # Defer immediately to allow time for role update
+        await interaction.response.defer()
+        await self._toggle_role(interaction, True)
+        await save_user_registration(interaction, self.friend_code, self.team, self.region, self.account_name, is_main=True)
+
+    @ui.button(label="Ne, děkuji", style=discord.ButtonStyle.secondary, emoji="🔕")
+    async def no_notifications(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer()
+        await save_user_registration(interaction, self.friend_code, self.team, self.region, self.account_name, is_main=True)
+
+    async def _toggle_role(self, interaction, enable):
+        if not interaction.guild:
+            return
+
+        config = await database.get_guild_config(interaction.guild.id)
+        if not config or not config['event_role_id']:
+            return
+
+        role = interaction.guild.get_role(config['event_role_id'])
+        if not role:
+            return
+
+        try:
+            if enable:
+                await interaction.user.add_roles(role, reason="Registration: Accepted Event Alerts")
+        except:
+            pass
+
 class RegionSelect(ui.Select):
     def __init__(self, friend_code, team, account_name, mode):
         self.friend_code = friend_code
@@ -97,8 +138,17 @@ class RegionSelect(ui.Select):
         region = self.values[0]
 
         if self.mode == "REGISTER":
-            # Direct save as Main
-            await save_user_registration(interaction, self.friend_code, self.team, region, self.account_name, True)
+            # Ask for Notifications
+            embed = discord.Embed(
+                title="Krok 3: Upozornění na Eventy",
+                description=f"Vybrán region: **{region}**.\n\nChcete dostávat upozornění na blížící se události (Eventy)?",
+                color=TEAMS.get(self.team, discord.Color.light_grey())
+            )
+            await interaction.response.edit_message(
+                content="",
+                embed=embed,
+                view=EventNotificationView(self.friend_code, self.team, region, self.account_name)
+            )
         else:
             # ADD_ACCOUNT: Ask for Main/Alt
             embed = discord.Embed(

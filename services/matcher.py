@@ -23,6 +23,10 @@ async def find_match(new_listing_id):
             pokemon_id=new_listing['pokemon_id'],
             is_shiny=new_listing['is_shiny'],
             is_purified=new_listing['is_purified'],
+            is_dynamax=new_listing['is_dynamax'],
+            is_gigantamax=new_listing['is_gigantamax'],
+            is_background=new_listing['is_background'],
+            is_adventure_effect=new_listing['is_adventure_effect'],
             exclude_user_id=new_listing['user_id']
         )
 

@@ -37,6 +37,10 @@ class ListingDraftView(ui.View):
         # State
         self.is_shiny = False
         self.is_purified = False
+        self.is_dynamax = False
+        self.is_gigantamax = False
+        self.is_background = False
+        self.is_adventure_effect = False
         self.details = initial_details
 
         # Default to main account or first account
@@ -48,41 +52,41 @@ class ListingDraftView(ui.View):
         # UI Setup
         self._update_components()
 
+    def _create_button(self, label, emoji, is_active, custom_id, callback, row):
+        style = discord.ButtonStyle.primary if is_active else discord.ButtonStyle.secondary
+        # Shiny uses success green
+        if label == "Shiny" and is_active:
+            style = discord.ButtonStyle.success
+
+        btn = ui.Button(label=label, emoji=emoji, style=style, custom_id=custom_id, row=row)
+        btn.callback = callback
+        return btn
+
     def _update_components(self):
         self.clear_items()
 
-        # Row 0: Toggles
-        btn_shiny = ui.Button(
-            label="Shiny",
-            emoji="✨",
-            style=discord.ButtonStyle.success if self.is_shiny else discord.ButtonStyle.secondary,
-            custom_id="toggle_shiny",
-            row=0
-        )
-        btn_shiny.callback = self.toggle_shiny
-        self.add_item(btn_shiny)
+        # Row 0: Basic Attributes
+        self.add_item(self._create_button("Shiny", "✨", self.is_shiny, "toggle_shiny", self.toggle_shiny, 0))
+        self.add_item(self._create_button("Purified", "🕊️", self.is_purified, "toggle_purified", self.toggle_purified, 0))
+        self.add_item(self._create_button("Dyna", None, self.is_dynamax, "toggle_dynamax", self.toggle_dynamax, 0))
+        self.add_item(self._create_button("Giga", None, self.is_gigantamax, "toggle_gigantamax", self.toggle_gigantamax, 0))
+        self.add_item(self._create_button("BG", "🌍", self.is_background, "toggle_bg", self.toggle_bg, 0))
 
-        btn_purified = ui.Button(
-            label="Purified",
-            emoji="🕊️",
-            style=discord.ButtonStyle.primary if self.is_purified else discord.ButtonStyle.secondary,
-            custom_id="toggle_purified",
-            row=0
-        )
-        btn_purified.callback = self.toggle_purified
-        self.add_item(btn_purified)
+        # Row 1: Advanced Attributes & Details
+        self.add_item(self._create_button("Adv", "🪄", self.is_adventure_effect, "toggle_adv", self.toggle_adv, 1))
 
         btn_details = ui.Button(
             label="Popis",
             emoji="📝",
             style=discord.ButtonStyle.secondary,
             custom_id="edit_details",
-            row=0
+            row=1
         )
         btn_details.callback = self.open_details_modal
         self.add_item(btn_details)
 
-        # Row 1: Account Select (if multiple accounts)
+        # Row 2: Account Select (if multiple accounts)
+        row_offset = 2
         if len(self.accounts) > 1:
             options = []
             for acc in self.accounts:
@@ -100,18 +104,19 @@ class ListingDraftView(ui.View):
                 min_values=1,
                 max_values=1,
                 options=options,
-                row=1
+                row=row_offset
             )
             select_account.callback = self.select_account
             self.add_item(select_account)
+            row_offset += 1
 
-        # Row 2: Actions
+        # Final Row: Actions
         btn_publish = ui.Button(
             label="Zveřejnit",
             emoji="✅",
             style=discord.ButtonStyle.green,
             custom_id="publish_listing",
-            row=2
+            row=row_offset
         )
         btn_publish.callback = self.publish
         self.add_item(btn_publish)
@@ -121,7 +126,7 @@ class ListingDraftView(ui.View):
             emoji="❌",
             style=discord.ButtonStyle.red,
             custom_id="cancel_listing",
-            row=2
+            row=row_offset
         )
         btn_cancel.callback = self.cancel
         self.add_item(btn_cancel)
@@ -136,6 +141,11 @@ class ListingDraftView(ui.View):
         status_parts = []
         if self.is_shiny: status_parts.append("✨ **Shiny**")
         if self.is_purified: status_parts.append("🕊️ **Purified**")
+        if self.is_dynamax: status_parts.append("**Dyna**")
+        if self.is_gigantamax: status_parts.append("**Giga**")
+        if self.is_background: status_parts.append("🌍 **BG**")
+        if self.is_adventure_effect: status_parts.append("🪄 **Adv**")
+
         if status_parts:
             desc += f"**Stav:** {' | '.join(status_parts)}\n"
 
@@ -178,6 +188,22 @@ class ListingDraftView(ui.View):
         self.is_purified = not self.is_purified
         await self.update_view(interaction)
 
+    async def toggle_dynamax(self, interaction: discord.Interaction):
+        self.is_dynamax = not self.is_dynamax
+        await self.update_view(interaction)
+
+    async def toggle_gigantamax(self, interaction: discord.Interaction):
+        self.is_gigantamax = not self.is_gigantamax
+        await self.update_view(interaction)
+
+    async def toggle_bg(self, interaction: discord.Interaction):
+        self.is_background = not self.is_background
+        await self.update_view(interaction)
+
+    async def toggle_adv(self, interaction: discord.Interaction):
+        self.is_adventure_effect = not self.is_adventure_effect
+        await self.update_view(interaction)
+
     async def open_details_modal(self, interaction: discord.Interaction):
         # Callback for the modal to update the view
         async def modal_callback(modal_interaction, new_details):
@@ -217,6 +243,10 @@ class ListingDraftView(ui.View):
                 self.pokemon_name,
                 self.is_shiny,
                 self.is_purified,
+                self.is_dynamax,
+                self.is_gigantamax,
+                self.is_background,
+                self.is_adventure_effect,
                 self.details
             )
 
