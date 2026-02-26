@@ -12,13 +12,66 @@ class Admin(commands.Cog):
 
     @commands.command()
     @commands.has_permissions(administrator=True)
-    async def sync(self, ctx):
-        """Syncs the slash commands globally."""
-        logger.info("Syncing commands...")
+    async def sync(self, ctx, option: str = None):
+        """
+        Syncs the slash commands.
+        Usage:
+        !sync             - Syncs to current guild and clears global commands.
+        !sync global      - Syncs globally.
+        !sync clear       - Clears ALL commands (global and guild).
+        !sync clearguild  - Clears GUILD commands.
+        """
+        logger.info(f"Sync command called with option: {option}")
         try:
-            synced = await self.bot.tree.sync()
-            await ctx.send(f"Synced {len(synced)} command(s).")
-            logger.info(f"Synced {len(synced)} commands.")
+            if option == "clear":
+                # Clear global and guild commands
+                self.bot.tree.clear_commands(guild=None)
+                await self.bot.tree.sync()
+                self.bot.tree.clear_commands(guild=ctx.guild)
+                await self.bot.tree.sync(guild=ctx.guild)
+                await ctx.send("Cleared global and guild commands.")
+                logger.info("Cleared global and guild commands.")
+
+            elif option == "clearguild":
+                # Clear guild commands
+                self.bot.tree.clear_commands(guild=ctx.guild)
+                await self.bot.tree.sync(guild=ctx.guild)
+                await ctx.send("Cleared guild commands.")
+                logger.info("Cleared guild commands.")
+
+            elif option == "global":
+                # Sync global commands
+                synced = await self.bot.tree.sync()
+                await ctx.send(f"Synced {len(synced)} global command(s).")
+                logger.info(f"Synced {len(synced)} global commands.")
+
+            else:
+                # Default: Sync to current guild and clear global
+
+                # 1. Clear current guild commands to ensure fresh start
+                self.bot.tree.clear_commands(guild=ctx.guild)
+
+                # 2. Copy global commands to guild
+                self.bot.tree.copy_global_to(guild=ctx.guild)
+
+                # 3. Sync to Guild
+                synced_guild = await self.bot.tree.sync(guild=ctx.guild)
+
+                # 4. Clear Global (but preserve in tree for future use)
+                # Snapshot current global commands
+                global_cmds = [c for c in self.bot.tree.get_commands(guild=None)]
+
+                # Clear and Sync (removes from Discord)
+                self.bot.tree.clear_commands(guild=None)
+                await self.bot.tree.sync()
+
+                # Restore to tree
+                for cmd in global_cmds:
+                    self.bot.tree.add_command(cmd)
+
+                await ctx.send(f"Synced {len(synced_guild)} commands to guild. Global commands cleared from Discord.")
+                logger.info(f"Synced {len(synced_guild)} commands to guild {ctx.guild.name}. Global commands cleared.")
+
         except Exception as e:
             await ctx.send(f"Failed to sync: {e}")
             logger.error(f"Failed to sync commands: {e}")
