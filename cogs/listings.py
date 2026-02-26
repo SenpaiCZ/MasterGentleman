@@ -4,7 +4,7 @@ from discord import app_commands, ui
 import database
 import services.matcher as matcher
 import views.trade
-from views.listing import ListingDraftView
+from views.listing import ListingDraftView, ListingManagementView
 import logging
 from data.pokemon import POKEMON_NAMES, POKEMON_IDS, POKEMON_IMAGES
 
@@ -48,6 +48,45 @@ class Listings(commands.Cog):
         if l.get('is_background'): attrs.append("🌍")
         if l.get('is_adventure_effect'): attrs.append("🪄")
         return " ".join(attrs)
+
+    def _create_listings_embed(self, listings, user_team_color):
+        embed = discord.Embed(title="Moje Seznamy (My Lists)", color=user_team_color)
+
+        if not listings:
+            embed.description = "Nemáte žádné aktivní nabídky ani poptávky."
+            return embed
+
+        # Group by Listing Type
+        nabidky_text = ""
+        poptavky_text = ""
+
+        for l in listings:
+            l_id = l['id']
+            l_type = l['listing_type']
+            p_id = l['pokemon_id']
+            acc_name = l['account_name']
+
+            p_name = POKEMON_IDS.get(p_id, f"Unknown #{p_id}")
+
+            attrs = self._format_attributes(l)
+            details = f"({l['details']})" if l['details'] else ""
+
+            # Truncate if too long (Discord limits)
+            line = f"**#{l_id}** [{acc_name}] | {p_name} {attrs} {details}\n"
+
+            if l_type == 'HAVE':
+                if len(nabidky_text) + len(line) < 1000:
+                    nabidky_text += line
+            else:
+                if len(poptavky_text) + len(line) < 1000:
+                    poptavky_text += line
+
+        if nabidky_text:
+            embed.add_field(name="📥 Nabízím (HAVE)", value=nabidky_text, inline=False)
+        if poptavky_text:
+            embed.add_field(name="📤 Hledám (WANT)", value=poptavky_text, inline=False)
+
+        return embed
 
     async def pokemon_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         current = current.lower()
@@ -326,42 +365,16 @@ class Listings(commands.Cog):
         """Zobrazí seznam aktivních záznamů uživatele."""
         try:
             listings = await database.get_user_listings(interaction.user.id)
-
-            if not listings:
-                await interaction.response.send_message("Nemáte žádné aktivní nabídky ani poptávky.", ephemeral=True)
-                return
-
             embed_color = await get_user_team_color(interaction.user.id)
-            embed = discord.Embed(title="Moje Seznamy (My Lists)", color=embed_color)
 
-            # Group by Listing Type, but mention Account
-            nabidky_text = ""
-            poptavky_text = ""
+            embed = self._create_listings_embed(listings, embed_color)
 
-            for l in listings:
-                l_id = l['id']
-                l_type = l['listing_type']
-                p_id = l['pokemon_id']
-                acc_name = l['account_name']
+            view = None
+            if listings:
+                embed_callback = lambda new_listings: self._create_listings_embed(new_listings, embed_color)
+                view = ListingManagementView(listings, interaction.user.id, embed_callback)
 
-                p_name = POKEMON_IDS.get(p_id, f"Unknown #{p_id}")
-
-                attrs = self._format_attributes(l)
-                details = f"({l['details']})" if l['details'] else ""
-
-                line = f"**#{l_id}** [{acc_name}] | {p_name} {attrs} {details}\n"
-
-                if l_type == 'HAVE':
-                    nabidky_text += line
-                else:
-                    poptavky_text += line
-
-            if nabidky_text:
-                embed.add_field(name="📥 Nabízím (HAVE)", value=nabidky_text, inline=False)
-            if poptavky_text:
-                embed.add_field(name="📤 Hledám (WANT)", value=poptavky_text, inline=False)
-
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
         except Exception as e:
             logger.error(f"Error fetching listings: {e}")
