@@ -95,6 +95,28 @@ async def add_user_account(user_id, friend_code, team, region, account_name="Mai
         """, (user_id, friend_code, team, region, account_name, is_main))
         await db.commit()
 
+async def update_user_account(account_id, **kwargs):
+    """Updates specific fields of a user account."""
+    allowed_fields = {'account_name', 'friend_code', 'team', 'region', 'is_main'}
+    updates = []
+    params = []
+
+    for key, value in kwargs.items():
+        if key in allowed_fields:
+            updates.append(f"{key} = ?")
+            params.append(value)
+
+    if not updates:
+        return False
+
+    params.append(account_id)
+    query = f"UPDATE users SET {', '.join(updates)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute(query, tuple(params))
+        await db.commit()
+    return True
+
 async def get_user_accounts(user_id):
     """Returns all accounts associated with a Discord user ID."""
     async with aiosqlite.connect(DB_NAME) as db:

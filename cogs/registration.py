@@ -51,7 +51,7 @@ async def save_user_registration(interaction, friend_code, team, region, account
     # Update roles
     cog = interaction.client.get_cog("Registration")
     if cog:
-        await cog.update_user_roles(interaction.guild, interaction.user, team, region)
+        await cog.sync_roles_with_main_account(interaction.guild, interaction.user)
 
     type_str = "Hlavní" if is_main else "Vedlejší"
     embed = discord.Embed(
@@ -219,6 +219,155 @@ class AddAccountModal(ui.Modal, title="Přidat další účet"):
             ephemeral=True
         )
 
+async def show_update_actions(interaction, account):
+    embed = discord.Embed(
+        title=f"Úprava účtu: {account['account_name']}",
+        description=f"**FC:** {account['friend_code']}\n**Tým:** {account['team']}\n**Region:** {account['region']}",
+        color=TEAMS.get(account['team'], discord.Color.default())
+    )
+    view = UpdateActionSelectView(account)
+    if interaction.response.is_done():
+        await interaction.edit_original_response(content="", embed=embed, view=view)
+    else:
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+async def confirm_update(interaction, account, field, value):
+    embed = discord.Embed(
+        title="✅ Aktualizace Úspěšná",
+        description=f"**{field}** byl změněn na: **{value}**",
+        color=discord.Color.green()
+    )
+    if not interaction.response.is_done():
+        await interaction.response.edit_message(content="", embed=embed, view=None)
+    else:
+        await interaction.edit_original_response(content="", embed=embed, view=None)
+
+class UpdateAccountSelect(ui.Select):
+    def __init__(self, accounts):
+        options = []
+        for acc in accounts:
+            is_main = "⭐ " if acc['is_main'] else ""
+            label = f"{is_main}{acc['account_name']} ({acc['team']})"
+            options.append(discord.SelectOption(label=label, value=str(acc['id'])))
+        super().__init__(placeholder="Vyberte účet...", min_values=1, max_values=1, options=options)
+        self.accounts = accounts
+
+    async def callback(self, interaction: discord.Interaction):
+        account_id = int(self.values[0])
+        account = next((a for a in self.accounts if a['id'] == account_id), None)
+        if account:
+            await show_update_actions(interaction, account)
+
+class UpdateAccountSelectView(ui.View):
+    def __init__(self, accounts):
+        super().__init__()
+        self.add_item(UpdateAccountSelect(accounts))
+
+class UpdateActionSelect(ui.Select):
+    def __init__(self, account):
+        self.account = account
+        options = [
+            discord.SelectOption(label="Změnit Jméno (Name)", value="name", description="Upravit In-Game Name"),
+            discord.SelectOption(label="Změnit Friend Code", value="fc", description="Upravit Friend Code"),
+            discord.SelectOption(label="Změnit Tým (Team)", value="team", description="Změnit herní tým"),
+            discord.SelectOption(label="Změnit Region", value="region", description="Změnit region hraní")
+        ]
+        super().__init__(placeholder="Co chcete upravit?", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        action = self.values[0]
+        if action == "name":
+            await interaction.response.send_modal(UpdateNameModal(self.account))
+        elif action == "fc":
+            await interaction.response.send_modal(UpdateFCModal(self.account))
+        elif action == "team":
+            await interaction.response.send_message("Vyberte nový tým:", view=UpdateTeamView(self.account), ephemeral=True)
+        elif action == "region":
+            await interaction.response.send_message("Vyberte nový region:", view=UpdateRegionView(self.account), ephemeral=True)
+
+class UpdateActionSelectView(ui.View):
+    def __init__(self, account):
+        super().__init__()
+        self.add_item(UpdateActionSelect(account))
+
+class UpdateNameModal(ui.Modal):
+    def __init__(self, account):
+        super().__init__(title="Změna Jména")
+        self.account = account
+        self.name_input = ui.TextInput(label="Nové Jméno", default=account['account_name'], min_length=1, max_length=20)
+        self.add_item(self.name_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        new_name = self.name_input.value.strip()
+        await database.update_user_account(self.account['id'], account_name=new_name)
+        await confirm_update(interaction, self.account, "Jméno", new_name)
+
+class UpdateFCModal(ui.Modal):
+    def __init__(self, account):
+        super().__init__(title="Změna Friend Code")
+        self.account = account
+        self.fc_input = ui.TextInput(label="Nový Friend Code", default=account['friend_code'], min_length=12, max_length=15)
+        self.add_item(self.fc_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        code = self.fc_input.value.replace(" ", "")
+        if not code.isdigit() or len(code) != 12:
+            await interaction.response.send_message("❌ Friend Code musí obsahovat přesně 12 číslic.", ephemeral=True)
+            return
+
+        await database.update_user_account(self.account['id'], friend_code=code)
+        await confirm_update(interaction, self.account, "Friend Code", code)
+
+class UpdateTeamSelect(ui.Select):
+    def __init__(self, account):
+        self.account = account
+        options = [
+            discord.SelectOption(label="Mystic (Blue)", value="Mystic", emoji="💙"),
+            discord.SelectOption(label="Valor (Red)", value="Valor", emoji="❤️"),
+            discord.SelectOption(label="Instinct (Yellow)", value="Instinct", emoji="💛")
+        ]
+        super().__init__(placeholder="Vyberte nový tým", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        new_team = self.values[0]
+        await database.update_user_account(self.account['id'], team=new_team)
+
+        # Sync roles if main
+        if self.account['is_main']:
+            cog = interaction.client.get_cog("Registration")
+            if cog:
+                await cog.sync_roles_with_main_account(interaction.guild, interaction.user)
+
+        await confirm_update(interaction, self.account, "Tým", new_team)
+
+class UpdateTeamView(ui.View):
+    def __init__(self, account):
+        super().__init__()
+        self.add_item(UpdateTeamSelect(account))
+
+class UpdateRegionSelect(ui.Select):
+    def __init__(self, account):
+        self.account = account
+        options = [discord.SelectOption(label=region) for region in REGIONS]
+        super().__init__(placeholder="Vyberte nový region", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        new_region = self.values[0]
+        await database.update_user_account(self.account['id'], region=new_region)
+
+        # Sync roles if main
+        if self.account['is_main']:
+            cog = interaction.client.get_cog("Registration")
+            if cog:
+                await cog.sync_roles_with_main_account(interaction.guild, interaction.user)
+
+        await confirm_update(interaction, self.account, "Region", new_region)
+
+class UpdateRegionView(ui.View):
+    def __init__(self, account):
+        super().__init__()
+        self.add_item(UpdateRegionSelect(account))
+
 class Registration(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -234,36 +383,59 @@ class Registration(commands.Cog):
                 return None
         return role
 
-    async def update_user_roles(self, guild, member, new_team, new_region):
+    async def sync_roles_with_main_account(self, guild, member):
+        """Ensures the member has roles matching their Main account only."""
         if not guild:
             return
 
-        # 1. Ensure new roles exist
-        team_role = await self._ensure_role(guild, new_team, TEAMS.get(new_team, discord.Color.default()))
-        region_role = await self._ensure_role(guild, new_region)
-
-        if not team_role or not region_role:
-            logger.warning("Could not assign roles due to missing permissions or errors.")
+        accounts = await database.get_user_accounts(member.id)
+        if not accounts:
             return
 
-        # 2. Add roles (we don't remove old ones anymore to support mixed roles, or maybe we should?)
-        # If user has Main Mystic and Alt Valor, having both roles might be confusing.
-        # But usually Discord roles denote 'identity'.
-        # Let's just ADD.
+        # Find Main Account
+        main_account = next((acc for acc in accounts if acc['is_main']), None)
+        if not main_account:
+            # Fallback to first account if no main is explicitly set
+            main_account = accounts[0]
+
+        target_team = main_account['team']
+        target_region = main_account['region']
+
+        # Ensure roles exist
+        target_team_role = await self._ensure_role(guild, target_team, TEAMS.get(target_team, discord.Color.default()))
+        target_region_role = await self._ensure_role(guild, target_region)
+
+        if not target_team_role or not target_region_role:
+            return
+
+        # Identify roles to remove
+        all_team_names = set(TEAMS.keys())
+        all_region_names = set(REGIONS)
+
+        roles_to_remove = []
+        roles_to_add = []
+
+        for role in member.roles:
+            if role.name in all_team_names and role.name != target_team:
+                roles_to_remove.append(role)
+            if role.name in all_region_names and role.name != target_region:
+                roles_to_remove.append(role)
+
+        if target_team_role not in member.roles:
+            roles_to_add.append(target_team_role)
+        if target_region_role not in member.roles:
+            roles_to_add.append(target_region_role)
 
         try:
-            roles_to_add = []
-            if team_role not in member.roles:
-                roles_to_add.append(team_role)
-            if region_role not in member.roles:
-                roles_to_add.append(region_role)
-
+            if roles_to_remove:
+                await member.remove_roles(*roles_to_remove, reason="Syncing Main Account Roles (Removal)")
             if roles_to_add:
-                await member.add_roles(*roles_to_add, reason="Registration Update")
-                logger.info(f"Updated roles for {member.display_name}: +{new_team}, +{new_region}")
+                await member.add_roles(*roles_to_add, reason="Syncing Main Account Roles (Addition)")
 
+            if roles_to_remove or roles_to_add:
+                logger.info(f"Synced roles for {member.display_name}: +{len(roles_to_add)}, -{len(roles_to_remove)}")
         except discord.Forbidden:
-            logger.error(f"Missing permissions to manage roles for {member.display_name}")
+            logger.error(f"Missing permissions to sync roles for {member.display_name}")
 
     @app_commands.command(name="registrace", description="Zaregistrujte svůj první (hlavní) účet")
     async def registrace(self, interaction: discord.Interaction):
@@ -292,6 +464,25 @@ class Registration(commands.Cog):
             return
 
         await interaction.response.send_modal(AddAccountModal())
+
+    @app_commands.command(name="upravit_profil", description="Upravit údaje profilu (jméno, FC, tým, region)")
+    async def upravit_profil(self, interaction: discord.Interaction):
+        """Umožňuje upravit údaje registrovaného účtu."""
+        accounts = await database.get_user_accounts(interaction.user.id)
+        if not accounts:
+            await interaction.response.send_message(
+                "❌ Nemáte žádný registrovaný účet. Použijte `/registrace`.",
+                ephemeral=True
+            )
+            return
+
+        if len(accounts) == 1:
+            # Auto-select the only account
+            await show_update_actions(interaction, accounts[0])
+        else:
+            # Show selection view
+            view = UpdateAccountSelectView(accounts)
+            await interaction.response.send_message("Vyberte účet k úpravě:", view=view, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Registration(bot))
