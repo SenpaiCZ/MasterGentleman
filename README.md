@@ -2,6 +2,14 @@
 
 A Discord bot designed to facilitate Pokémon GO trades within your community. It helps users list their offers and requests, find potential trade partners, and coordinate meetups.
 
+## Co umím a jak ti pomůžu?
+
+*   **Snadné výměny Pokémonů**: Hledáš konkrétního Pokémona nebo nabízíš přebytky? Zadej to ke mě a já ti najdu ideálního parťáka na výměnu. Podporuji i Shiny, Purified, Dynamax a další!
+*   **Automatické párování**: Nemusíš procházet stovky zpráv. Jakmile se objeví někdo, kdo hledá to, co máš, nebo nabízí to, co chceš, dám ti vědět.
+*   **Stylové vizitky pro sdílení**: Jedním příkazem ti vytvořím krásný obrázek s tvou nabídkou či poptávkou, který můžeš sdílet na sociálních sítích nebo v jiných skupinách.
+*   **Přehled o eventech**: Už žádné zmeškané Raid Hour nebo Community Day! Pravidelně informuji o všem, co se ve světě Pokémon GO chystá.
+*   **Rychlé sdílení Trainer Code**: Ostatní trenéři si tvůj kód snadno zobrazí nebo načtou QR kód, takže přidávání přátel je hračka.
+
 ## Features
 
 *   **Trade Listings**: Users can easily list Pokémon they have (HAVE) or want (WANT).
