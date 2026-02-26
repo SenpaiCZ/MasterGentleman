@@ -12,6 +12,7 @@ class Config(commands.Cog):
 
     setup_group = app_commands.Group(name="setup", description="Nastavení bota")
     events_group = app_commands.Group(name="udalosti", description="Nastavení upozornění na Pokémon GO eventy", parent=setup_group)
+    trade_group = app_commands.Group(name="trade", description="Nastavení obchodů", parent=setup_group)
 
     @setup_group.command(name="nabidka", description="Nastavit kanál pro nové nabídky (HAVE)")
     @app_commands.describe(channel="Textový kanál pro nabídky")
@@ -45,6 +46,15 @@ class Config(commands.Cog):
         await database.set_guild_config(interaction.guild_id, event_role_id=role.id)
         await interaction.response.send_message(f"✅ Role pro eventy nastavena na: {role.mention}", ephemeral=True)
 
+    # --- Trade Subgroup ---
+
+    @trade_group.command(name="category", description="Nastavit kategorii pro nové obchody")
+    @app_commands.describe(category="Kategorie kanálů")
+    @commands.has_permissions(administrator=True)
+    async def set_trade_category(self, interaction: discord.Interaction, category: discord.CategoryChannel):
+        await database.set_guild_config(interaction.guild_id, trade_category_id=category.id)
+        await interaction.response.send_message(f"✅ Kategorie pro **Obchody** byla nastavena na: {category.name}", ephemeral=True)
+
     @events_group.command(name="stav", description="Zobrazit aktuální nastavení")
     @commands.has_permissions(administrator=True)
     async def status(self, interaction: discord.Interaction):
@@ -55,6 +65,7 @@ class Config(commands.Cog):
         event_role = "Nenastaveno"
         have_ch = "Nenastaveno"
         want_ch = "Nenastaveno"
+        trade_cat = "Nenastaveno"
 
         if config:
             if config['event_channel_id']:
@@ -77,6 +88,11 @@ class Config(commands.Cog):
                 if ch: want_ch = ch.mention
                 else: want_ch = f"Invalid ID ({config['want_channel_id']})"
 
+            if config.get('trade_category_id'): # Use get safely
+                cat = interaction.guild.get_channel(config['trade_category_id'])
+                if cat: trade_cat = cat.name
+                else: trade_cat = f"Invalid ID ({config['trade_category_id']})"
+
         msg = (
             f"**⚙️ Nastavení Bota:**\n\n"
             f"**📅 Udalosti (Events):**\n"
@@ -84,7 +100,8 @@ class Config(commands.Cog):
             f"🔔 Role: {event_role}\n\n"
             f"**🤝 Obchody:**\n"
             f"📥 Nabídky (HAVE): {have_ch}\n"
-            f"📤 Poptávky (WANT): {want_ch}"
+            f"📤 Poptávky (WANT): {want_ch}\n"
+            f"📂 Kategorie: {trade_cat}"
         )
         await interaction.response.send_message(msg, ephemeral=True)
 
