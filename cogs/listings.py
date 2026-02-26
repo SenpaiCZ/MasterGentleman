@@ -187,14 +187,42 @@ class Listings(commands.Cog):
 
             view = ListingConfirmationView(friend_code)
 
-            # Notify the user via ephemeral followup that it's done
-            await interaction.followup.send("✅ Záznam byl úspěšně zveřejněn do kanálu.", ephemeral=True)
+            # Determine target channel from config
+            target_channel = interaction.channel
+            config = None
+            if interaction.guild:
+                config = await database.get_guild_config(interaction.guild.id)
+
+            if config:
+                if listing_type == 'HAVE' and config['have_channel_id']:
+                    ch = interaction.guild.get_channel(config['have_channel_id'])
+                    if ch:
+                        target_channel = ch
+                elif listing_type == 'WANT' and config['want_channel_id']:
+                    ch = interaction.guild.get_channel(config['want_channel_id'])
+                    if ch:
+                        target_channel = ch
 
             # Send the PUBLIC message to the channel so others can see it
-            if interaction.channel:
-                await interaction.channel.send(embed=embed, view=view)
+            msg_loc = ""
+            if target_channel:
+                try:
+                    await target_channel.send(embed=embed, view=view)
+                    if target_channel != interaction.channel:
+                        msg_loc = f" do kanálu {target_channel.mention}"
+                except Exception as e:
+                    logger.error(f"Failed to send to target channel {target_channel.id}: {e}")
+                    # Try fallback to current channel if different
+                    if target_channel != interaction.channel and interaction.channel:
+                        try:
+                            await interaction.channel.send(embed=embed, view=view)
+                        except:
+                            pass
             else:
                 logger.warning(f"Could not send public message for listing {listing_id} - no channel.")
+
+            # Notify the user via ephemeral followup that it's done
+            await interaction.followup.send(f"✅ Záznam byl úspěšně zveřejněn{msg_loc}.", ephemeral=True)
 
             logger.info(f"User {interaction.user.id} added listing {listing_type} {pokemon_name} (#{pokemon_id}) for account {account_id} (ID: {listing_id})")
 
