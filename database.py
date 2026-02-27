@@ -523,7 +523,7 @@ async def get_user_listings(user_id, status='ACTIVE'):
             JOIN users u ON l.account_id = u.id
             JOIN pokemon_species p ON l.species_id = p.id
             WHERE l.user_id = ? AND l.status = ?
-            ORDER BY l.created_at DESC, l.id DESC
+            ORDER BY p.pokedex_num ASC, p.form ASC, l.is_shiny DESC, l.created_at DESC
         """
         async with db.execute(sql, (user_id, status)) as cursor:
             return await cursor.fetchall()
@@ -537,7 +537,7 @@ async def get_account_listings(account_id, status='ACTIVE'):
             JOIN users u ON l.account_id = u.id
             JOIN pokemon_species p ON l.species_id = p.id
             WHERE l.account_id = ? AND l.status = ?
-            ORDER BY l.created_at DESC, l.id DESC
+            ORDER BY p.pokedex_num ASC, p.form ASC, l.is_shiny DESC, l.created_at DESC
         """
         async with db.execute(sql, (account_id, status)) as cursor:
             return await cursor.fetchall()
