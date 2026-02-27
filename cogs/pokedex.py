@@ -142,8 +142,16 @@ class Pokedex(commands.Cog):
         # Features
         features = []
         if species['can_dynamax']: features.append("Dynamax")
-        if species['can_gigantamax']: features.append("Gigantamax")
-        if species['can_mega']: features.append("Mega Evolution")
+        # Check for other forms (Mega, Gigantamax, Shadow)
+        variants = await database.get_pokemon_variants(species['pokedex_num'])
+        for v in variants:
+            form = v['form']
+            if "Mega" in form and "Mega Evolution" not in features:
+                features.append("Mega Evolution")
+            if "Gigantamax" in form and "Gigantamax" not in features:
+                features.append("Gigantamax")
+            if "Shadow" in form and "Shadow" not in features:
+                features.append("Shadow")
 
         if features:
             embed.add_field(name="Capabilities in GO", value=", ".join(features), inline=False)
@@ -152,7 +160,7 @@ class Pokedex(commands.Cog):
         links = f"[GO Hub Database](https://db.pokemongohub.net/pokemon/{species['pokedex_num']})"
         embed.add_field(name="More Info", value=links, inline=False)
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Pokedex(bot))
