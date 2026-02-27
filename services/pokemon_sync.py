@@ -91,7 +91,8 @@ async def scrape_pokemon_data():
                 image_url = None
                 img_tag = cols[0].find('img', class_='icon-pkmn')
                 if img_tag:
-                    image_url = img_tag.get('src')
+                    # Check data-src first (lazy loading), then src
+                    image_url = img_tag.get('data-src') or img_tag.get('src')
 
                 # Fallback to old logic just in case
                 if not image_url:

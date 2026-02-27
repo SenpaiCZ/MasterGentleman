@@ -22,12 +22,15 @@ class ImageGenerator:
 
     async def _download_image(self, session, url, filepath):
         try:
+            # logger.info(f"Downloading image from {url} to {filepath}")
             async with session.get(url) as resp:
                 if resp.status == 200:
                     data = await resp.read()
                     # Write in executor to avoid blocking disk IO on main thread
                     await asyncio.to_thread(self._write_file, filepath, data)
                     return True
+                else:
+                    logger.warning(f"Failed to download image from {url}: Status {resp.status}")
         except Exception as e:
             logger.error(f"Error downloading image {url}: {e}")
         return False
@@ -42,15 +45,25 @@ class ImageGenerator:
         needed = set()
 
         for item in listings:
-            # We use pokemon_id (pokedex_num) + form + shiny for cache key
-            pid = item.get('pokemon_id')
+            # Prefer explicit pokedex_num if available (aliases sometimes confusing)
+            pid = item.get('pokedex_num') or item.get('pokemon_id')
+
+            # If pid matches species_id but we want dex num, this check is hard without context.
+            # But get_account_listings returns p.pokedex_num as pokemon_id.
+
+            if pid is None:
+                logger.warning(f"Item missing pokemon_id/pokedex_num: {item}")
+                continue
+
             pform = item.get('pokemon_form', 'Normal')
             is_shiny = item['is_shiny']
 
             # Construct filename: {id}_{form}_{shiny}.png
             # Sanitize form name
             safe_form = pform.replace(" ", "_").lower()
-            filename = f"{pid}_{safe_form}_{'shiny' if is_shiny else 'normal'}.png"
+
+            # Add v1 prefix to bust cache if old files were wrong
+            filename = f"v1_{pid}_{safe_form}_{'shiny' if is_shiny else 'normal'}.png"
             filepath = os.path.join(self.sprite_dir, filename)
 
             if (pid, pform, is_shiny) in needed:
@@ -62,6 +75,8 @@ class ImageGenerator:
                 url = item.get('image_url')
                 if url:
                     tasks.append((url, filepath))
+                else:
+                    logger.warning(f"No image_url for Pokemon ID {pid} ({pform})")
 
         if tasks:
             async with aiohttp.ClientSession() as session:
@@ -71,7 +86,8 @@ class ImageGenerator:
     def _get_sprite_sync(self, pokemon_id, pokemon_form, is_shiny):
         """Sync function to load image from disk."""
         safe_form = pokemon_form.replace(" ", "_").lower()
-        filename = f"{pokemon_id}_{safe_form}_{'shiny' if is_shiny else 'normal'}.png"
+        # Ensure we use the v1 prefix
+        filename = f"v1_{pokemon_id}_{safe_form}_{'shiny' if is_shiny else 'normal'}.png"
         filepath = os.path.join(self.sprite_dir, filename)
 
         if os.path.exists(filepath):
@@ -213,7 +229,8 @@ class ImageGenerator:
 
             draw.rectangle([(x + 2, y + 2), (x + CELL_W - 2, y + CELL_H - 2)], fill=(47, 49, 54), outline=None)
 
-            pokemon_id = item.get('pokemon_id') # This is pokedex_num from JOIN
+            # Prefer explicit pokedex_num if available
+            pokemon_id = item.get('pokedex_num') or item.get('pokemon_id')
             pokemon_form = item.get('pokemon_form', 'Normal')
             is_shiny = item['is_shiny']
             is_purified = item['is_purified']
