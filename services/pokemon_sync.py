@@ -3,204 +3,240 @@ import asyncio
 import logging
 from bs4 import BeautifulSoup
 import database
+import re
+from urllib.parse import unquote
 
 logger = logging.getLogger('discord')
 logging.basicConfig(level=logging.INFO)
 
-POKEMON_DB_URL = "https://pokemondb.net/pokedex/all"
-DYNAMAX_URL = "https://pokemondb.net/go/dynamax-attackers"
+BASE_URL = "https://db.pokemongohub.net"
+MAX_POKEMON_ID = 1025
 
 async def scrape_pokemon_data():
     """
-    Scrapes Pokemon data from pokemondb.net and populates the pokemon_species table.
-    Uses database.get_db() for connection consistency.
+    Scrapes Pokemon data from db.pokemongohub.net by iterating IDs.
+    Populates the pokemon_species table.
     """
-    logger.info("Starting Pokemon data sync...")
-    print("Starting Pokemon data sync...")
+    logger.info("Starting Pokemon GO data sync from db.pokemongohub.net...")
+    print("Starting Pokemon GO data sync...")
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(POKEMON_DB_URL) as response:
-            if response.status != 200:
-                logger.error(f"Failed to fetch Pokemon DB: {response.status}")
-                return
-            html = await response.text()
-            print(f"Downloaded Pokedex HTML, length: {len(html)}")
-
-    soup = BeautifulSoup(html, 'html.parser')
-    table = soup.find('table', {'id': 'pokedex'})
-    if not table:
-        print("Table not found!")
-        return
-
-    rows = table.find_all('tr')
-    print(f"Found {len(rows)} rows.")
-    rows = rows[1:]
-
-    count = 0
-
-    # Use database.get_db() context manager
-    async with database.get_db() as db:
-        # PRAGMA is handled by get_db()
-
-        for i, row in enumerate(rows):
-            if i % 100 == 0:
-                print(f"Processing row {i}...")
-
-            cols = row.find_all('td')
-            if not cols: continue
-
-            try:
-                pokedex_num = int(cols[0].find('span', class_='infocard-cell-data').text)
-
-                name_col = cols[1]
-                name_link = name_col.find('a', class_='ent-name')
-                name = name_link.text
-
-                form_text = name_col.find('small', class_='text-muted')
-                form = form_text.text if form_text else 'Normal'
-
-                type_links = cols[2].find_all('a')
-                type1 = type_links[0].text
-                type2 = type_links[1].text if len(type_links) > 1 else None
-
-                hp = int(cols[4].text)
-                attack = int(cols[5].text)
-                defense = int(cols[6].text)
-                sp_atk = int(cols[7].text)
-                sp_def = int(cols[8].text)
-                speed = int(cols[9].text)
-
-                can_mega = 'Mega' in form
-                can_dynamax = False # Will be updated later
-                can_gigantamax = 'Gigantamax' in form
-
-                if 'Mega ' in form or 'Primal ' in form:
-                    # Update base form if exists
-                    async with db.execute("SELECT id FROM pokemon_species WHERE name = ? AND form = 'Normal'", (name,)) as cursor:
-                        base_row = await cursor.fetchone()
-
-                    if base_row:
-                        # Update can_mega
-                        await db.execute("UPDATE pokemon_species SET can_mega = 1 WHERE id = ?", (base_row['id'],))
-                        await db.commit()
-
-                    # Continue to upsert this form
-                    pass
-
-                # New logic for image scraping (picture > img)
-                image_url = None
-                img_tag = cols[0].find('img', class_='icon-pkmn')
-                if img_tag:
-                    # Check data-src first (lazy loading), then src
-                    image_url = img_tag.get('data-src') or img_tag.get('src')
-
-                # Fallback to old logic just in case
-                if not image_url:
-                    icon_span = cols[0].find('span', class_='img-fixed')
-                    image_url = icon_span.get('data-src') if icon_span else None
-
-                # Upsert Logic
-                async with db.execute("SELECT id FROM pokemon_species WHERE pokedex_num = ? AND form = ?", (pokedex_num, form)) as cursor:
-                    existing = await cursor.fetchone()
-
-                if existing:
-                    await db.execute("""
-                        UPDATE pokemon_species
-                        SET name=?, type1=?, type2=?, image_url=?, can_dynamax=?, can_gigantamax=?, can_mega=?,
-                            hp=?, attack=?, defense=?, sp_atk=?, sp_def=?, speed=?
-                        WHERE id=?
-                    """, (name, type1, type2, image_url, can_dynamax, can_gigantamax, can_mega,
-                          hp, attack, defense, sp_atk, sp_def, speed, existing['id']))
-                else:
-                    await db.execute("""
-                        INSERT INTO pokemon_species (
-                            pokedex_num, name, form, type1, type2, image_url,
-                            can_dynamax, can_gigantamax, can_mega,
-                            hp, attack, defense, sp_atk, sp_def, speed
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (pokedex_num, name, form, type1, type2, image_url,
-                          can_dynamax, can_gigantamax, can_mega,
-                          hp, attack, defense, sp_atk, sp_def, speed))
-
-                await db.commit()
-                count += 1
-
-            except Exception as e:
-                logger.error(f"Error parsing row: {e}")
-                continue
-
-        print(f"Synced {count} Pokemon species.")
-
-        # Scrape Dynamax/Gigantamax
-        async with aiohttp.ClientSession() as session:
-             await scrape_dynamax_data(db, session)
-
-        print("Done.")
-
-async def scrape_dynamax_data(db, session):
-    """
-    Scrapes https://pokemondb.net/go/dynamax-attackers to find which pokemon can Dynamax in GO.
-    """
-    print("Scraping Dynamax data...")
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
-    async with session.get(DYNAMAX_URL, headers=headers) as response:
-        if response.status != 200:
-            logger.error(f"Failed to fetch Dynamax DB: {response.status}")
-            return
-        html = await response.text()
+
+    async with database.get_db() as db:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            for pokedex_num in range(1, MAX_POKEMON_ID + 1):
+                try:
+                    await process_pokemon_family(db, session, pokedex_num)
+                except Exception as e:
+                    logger.error(f"Error processing #{pokedex_num}: {e}")
+
+                # Polite delay
+                await asyncio.sleep(1.0)
+
+    print("Pokemon data sync complete.")
+
+async def process_pokemon_family(db, session, pokedex_num):
+    """
+    Fetches the main pokemon page, parses base form, and discovers/fetches other forms.
+    """
+    url = f"{BASE_URL}/pokemon/{pokedex_num}"
+    try:
+        async with session.get(url) as response:
+            if response.status == 404:
+                print(f"Pokemon #{pokedex_num} not found (404). Skipping.")
+                return
+            if response.status != 200:
+                logger.error(f"Failed to fetch {url}: {response.status}")
+                return
+            html = await response.text()
+    except Exception as e:
+        logger.error(f"Error fetching {url}: {e}")
+        return
 
     soup = BeautifulSoup(html, 'html.parser')
 
-    table = soup.find('table', class_='data-table')
-    if not table:
-        tables = soup.find_all('table')
-        for t in tables:
-            if "Max Move" in t.text:
-                table = t
-                break
+    # --- 1. Parse Base Form ---
+    base_name = get_text(soup, 'h1')
+    if not base_name:
+        base_name = f"Pokemon {pokedex_num}"
 
-    if not table:
-        print("Dynamax table not found.")
+    base_name = re.sub(r'\s*#\d+$', '', base_name).strip()
+
+    stats = parse_stats(soup)
+    types = parse_types(soup)
+    image_url, shiny_image_url = parse_images(soup)
+
+    # Upsert Base Form
+    await upsert_species(db, pokedex_num, base_name, "Normal", types, stats, image_url, shiny_image_url)
+    print(f"Synced #{pokedex_num} {base_name} (Normal)")
+
+    # --- 2. Discover Forms ---
+    processed_urls = {url}
+
+    links = soup.find_all('a', href=True)
+    form_links = set()
+
+    for link in links:
+        href = link['href']
+        # Check if it matches /pokemon/{id}-...
+        if href.startswith(f"/pokemon/{pokedex_num}-"):
+            full_url = f"{BASE_URL}{href}"
+            if full_url not in processed_urls:
+                form_links.add(full_url)
+
+    # Process discovered forms
+    for form_url in form_links:
+        processed_urls.add(form_url)
+        await process_single_form(db, session, pokedex_num, form_url, base_name)
+
+async def process_single_form(db, session, pokedex_num, url, base_name):
+    try:
+        async with session.get(url) as response:
+            if response.status != 200: return
+            html = await response.text()
+    except:
         return
 
-    rows = table.find_all('tr')
-    print(f"Found {len(rows)} rows in Dynamax table.")
+    soup = BeautifulSoup(html, 'html.parser')
 
-    dynamax_species = set()
-    gigantamax_species = set()
+    # Determine form name
+    slug = url.split('/')[-1] # "3-Mega"
+    suffix = slug.replace(f"{pokedex_num}-", "") # "Mega"
 
-    for row in rows[1:]: # Skip header
-        cols = row.find_all('td')
-        if not cols or len(cols) < 2: continue
+    form_name = suffix.replace("-", " ").title() # "Mega"
 
-        name_cell = cols[1]
-        name_span = name_cell.find('span', class_='ent-name')
-        if name_span:
-            full_name = name_span.text.strip()
-        else:
-            full_name = name_cell.get_text(separator=" ").strip()
+    if "Alola" in form_name: form_name = "Alolan"
+    if "Galar" in form_name: form_name = "Galarian"
+    if "Hisui" in form_name: form_name = "Hisuian"
+    if "Paldea" in form_name: form_name = "Paldean"
 
-        if "Gigantamax " in full_name:
-            base_name = full_name.replace("Gigantamax ", "").strip()
-            gigantamax_species.add(base_name)
-            dynamax_species.add(base_name)
-        elif "Dynamax " in full_name:
-            base_name = full_name.replace("Dynamax ", "").strip()
-            dynamax_species.add(base_name)
+    stats = parse_stats(soup)
+    types = parse_types(soup)
+    image_url, shiny_image_url = parse_images(soup)
 
-    print(f"Found {len(dynamax_species)} Dynamax species and {len(gigantamax_species)} Gigantamax species in GO.")
+    # Upsert
+    await upsert_species(db, pokedex_num, base_name, form_name, types, stats, image_url, shiny_image_url)
+    print(f"  -> Synced #{pokedex_num} {base_name} ({form_name})")
 
-    for name in dynamax_species:
-        cursor = await db.execute("UPDATE pokemon_species SET can_dynamax = 1 WHERE name = ? AND form = 'Normal'", (name,))
 
-    for name in gigantamax_species:
-        await db.execute("UPDATE pokemon_species SET can_gigantamax = 1 WHERE name = ? AND form = 'Normal'", (name,))
+def parse_stats(soup):
+    stats = {'attack': 0, 'defense': 0, 'hp': 0}
+    text = soup.get_text()
 
-    await db.commit()
-    print("Dynamax flags updated.")
+    atk_match = re.search(r'Attack\s+(\d+)', text)
+    if atk_match: stats['attack'] = int(atk_match.group(1))
+
+    def_match = re.search(r'Defense\s+(\d+)', text)
+    if def_match: stats['defense'] = int(def_match.group(1))
+
+    hp_match = re.search(r'Stamina\s+(\d+)', text)
+    if hp_match: stats['hp'] = int(hp_match.group(1))
+
+    return stats
+
+def parse_types(soup):
+    found_types = []
+    # Search for type links in the specific "header" area or just generally unique ones
+    # db.pokemongohub.net structure usually puts type icons near the top with links like /pokemon-list/type-xxx
+
+    for a in soup.find_all('a', href=True):
+        href = a['href']
+        if '/pokemon-list/type-' in href:
+            t = href.split('-')[-1].capitalize()
+            if t not in found_types:
+                found_types.append(t)
+
+    return found_types[:2] if found_types else []
+
+def parse_images(soup):
+    """Returns (normal_url, shiny_url)"""
+    normal_url = None
+    shiny_url = None
+
+    images = soup.find_all('img', src=True)
+
+    # Helper to extract nextjs url
+    def extract_nextjs_url(src):
+        if 'url=' in src:
+            try:
+                start = src.find('url=') + 4
+                end = src.find('&', start)
+                if end == -1: end = len(src)
+                return unquote(src[start:end])
+            except:
+                return src
+        return src
+
+    # 1. Look for Official
+    for img in images:
+        src = extract_nextjs_url(img['src'])
+        if not src.startswith('http'): src = f"{BASE_URL}{src}"
+
+        if '/images/official/' in src:
+            # We prefer 'medium' or 'full'.
+            if not normal_url:
+                normal_url = src
+            elif 'thumb' in normal_url and ('medium' in src or 'full' in src):
+                normal_url = src
+
+    # 2. Look for Shiny (Home Renders or Ingame)
+    # Search for "Shiny" in alt text or surroundings?
+    # Or look for specific path patterns.
+    # Pokemon Home Shiny: /images/pokemon-home-renders/Shiny/
+    # Ingame Shiny: .s.icon.png
+
+    for img in images:
+        src = extract_nextjs_url(img['src'])
+        if not src.startswith('http'): src = f"{BASE_URL}{src}"
+
+        if '/images/pokemon-home-renders/Shiny/' in src:
+            if not shiny_url: shiny_url = src
+            # Prefer higher res if possible?
+
+        elif '.s.icon.png' in src:
+            # Ingame shiny
+            if not shiny_url: shiny_url = src
+
+    # Fallback for normal if no official
+    if not normal_url:
+        for img in images:
+            src = extract_nextjs_url(img['src'])
+            if not src.startswith('http'): src = f"{BASE_URL}{src}"
+            if '/images/pokemon-home-renders/Normal/' in src:
+                normal_url = src
+                break
+
+    return normal_url, shiny_url
+
+def get_text(soup, tag):
+    t = soup.find(tag)
+    return t.text.strip() if t else None
+
+async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, shiny_image_url):
+    type1 = types[0] if len(types) > 0 else None
+    type2 = types[1] if len(types) > 1 else None
+
+    # Flags
+    can_dynamax = "Gigantamax" in form
+    can_gigantamax = "Gigantamax" in form
+    can_mega = "Mega" in form or "Primal" in form
+
+    # GO Stats
+    hp = stats.get('hp', 0)
+    attack = stats.get('attack', 0)
+    defense = stats.get('defense', 0)
+
+    sp_atk = 0
+    sp_def = 0
+    speed = 0
+
+    await database.upsert_pokemon_species(
+        pokedex_num, name, form, type1, type2, image_url, shiny_image_url,
+        can_dynamax, can_gigantamax, can_mega,
+        hp, attack, defense, sp_atk, sp_def, speed
+    )
 
 if __name__ == "__main__":
     try:

@@ -67,6 +67,7 @@ async def init_db():
                     type1 TEXT,
                     type2 TEXT,
                     image_url TEXT,
+                    shiny_image_url TEXT,
                     can_dynamax BOOLEAN DEFAULT 0,
                     can_gigantamax BOOLEAN DEFAULT 0,
                     can_mega BOOLEAN DEFAULT 0,
@@ -91,6 +92,10 @@ async def init_db():
                 if col not in columns:
                     logger.info(f"Adding missing column {col} to pokemon_species table.")
                     await db.execute(f"ALTER TABLE pokemon_species ADD COLUMN {col} INTEGER DEFAULT 0")
+
+            if 'shiny_image_url' not in columns:
+                logger.info("Adding missing column shiny_image_url to pokemon_species table.")
+                await db.execute("ALTER TABLE pokemon_species ADD COLUMN shiny_image_url TEXT")
 
             # 3. Listings
             # Changed pokemon_id (int) to species_id (FK)
@@ -235,7 +240,7 @@ async def get_account(account_id):
 
 # --- Pokemon Species ---
 
-async def upsert_pokemon_species(pokedex_num, name, form, type1, type2=None, image_url=None,
+async def upsert_pokemon_species(pokedex_num, name, form, type1, type2=None, image_url=None, shiny_image_url=None,
                                  can_dynamax=False, can_gigantamax=False, can_mega=False,
                                  hp=0, attack=0, defense=0, sp_atk=0, sp_def=0, speed=0):
     """Inserts or updates a pokemon species."""
@@ -248,19 +253,25 @@ async def upsert_pokemon_species(pokedex_num, name, form, type1, type2=None, ima
             # Update
             await db.execute("""
                 UPDATE pokemon_species
-                SET name=?, type1=?, type2=?, image_url=?, can_dynamax=?, can_gigantamax=?, can_mega=?,
+                SET name=?, type1=?, type2=?, image_url=?, shiny_image_url=?, can_dynamax=?, can_gigantamax=?, can_mega=?,
                     hp=?, attack=?, defense=?, sp_atk=?, sp_def=?, speed=?
                 WHERE id=?
-            """, (name, type1, type2, image_url, can_dynamax, can_gigantamax, can_mega,
+            """, (name, type1, type2, image_url, shiny_image_url, can_dynamax, can_gigantamax, can_mega,
                   hp, attack, defense, sp_atk, sp_def, speed, row['id']))
             await db.commit()
             return row['id']
         else:
             # Insert
             cursor = await db.execute("""
-                INSERT INTO pokemon_species (pokedex_num, name, form, type1, type2, image_url, can_dynamax, can_gigantamax, can_mega, hp, attack, defense, sp_atk, sp_def, speed)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (pokedex_num, name, form, type1, type2, image_url, can_dynamax, can_gigantamax, can_mega, hp, attack, defense, sp_atk, sp_def, speed))
+                INSERT INTO pokemon_species (
+                    pokedex_num, name, form, type1, type2, image_url, shiny_image_url,
+                    can_dynamax, can_gigantamax, can_mega,
+                    hp, attack, defense, sp_atk, sp_def, speed
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (pokedex_num, name, form, type1, type2, image_url, shiny_image_url,
+                  can_dynamax, can_gigantamax, can_mega,
+                  hp, attack, defense, sp_atk, sp_def, speed))
             await db.commit()
             return cursor.lastrowid
 
@@ -366,7 +377,7 @@ async def get_listing(listing_id):
         sql = """
             SELECT l.*,
                    u.friend_code, u.account_name, u.team, u.region,
-                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url
+                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url, p.shiny_image_url
             FROM listings l
             JOIN users u ON l.account_id = u.id
             JOIN pokemon_species p ON l.species_id = p.id
@@ -379,7 +390,7 @@ async def get_user_listings(user_id, status='ACTIVE'):
     async with get_db() as db:
         sql = """
             SELECT l.*, u.account_name,
-                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url
+                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url, p.shiny_image_url
             FROM listings l
             JOIN users u ON l.account_id = u.id
             JOIN pokemon_species p ON l.species_id = p.id
@@ -393,7 +404,7 @@ async def get_account_listings(account_id, status='ACTIVE'):
     async with get_db() as db:
         sql = """
             SELECT l.*, u.account_name,
-                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url
+                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url, p.shiny_image_url
             FROM listings l
             JOIN users u ON l.account_id = u.id
             JOIN pokemon_species p ON l.species_id = p.id

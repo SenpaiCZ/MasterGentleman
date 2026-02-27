@@ -72,7 +72,13 @@ class ImageGenerator:
 
             if not os.path.exists(filepath):
                 # Get URL from item (it comes from DB join)
-                url = item.get('image_url')
+                url = None
+                if is_shiny and item.get('shiny_image_url'):
+                    url = item.get('shiny_image_url')
+
+                if not url:
+                    url = item.get('image_url')
+
                 if url:
                     tasks.append((url, filepath))
                 else:
