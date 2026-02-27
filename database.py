@@ -418,19 +418,19 @@ async def search_pokemon_species(query, limit=25):
         async with db.execute(sql, (like_query, like_query, limit)) as cursor:
             return await cursor.fetchall()
 
-async def search_pokemon_species_extended(query, limit=25):
+async def search_pokemon_species_extended(query, limit=25, exclude_mega=False):
     """
     Search for autocomplete by name, type, or stat match (broad search).
     Query logic:
     - If query matches a type (e.g. "Fire"), return Fire types.
     - Else search by name.
     - Exclude Shadow variants.
+    - Optionally exclude Mega variants.
     """
     async with get_db() as db:
         like_query = f"%{query}%"
 
-        # Check if query matches a known type (simple check)
-        # We can just do a giant OR
+        # Build query parts
         sql = """
             SELECT * FROM pokemon_species
             WHERE (name LIKE ?
@@ -438,9 +438,16 @@ async def search_pokemon_species_extended(query, limit=25):
                OR type1 LIKE ?
                OR type2 LIKE ?)
                AND form NOT LIKE '%Shadow%'
+        """
+
+        if exclude_mega:
+            sql += " AND form NOT LIKE '%Mega%'"
+
+        sql += """
             ORDER BY pokedex_num ASC
             LIMIT ?
         """
+
         async with db.execute(sql, (like_query, like_query, like_query, like_query, limit)) as cursor:
             return await cursor.fetchall()
 
