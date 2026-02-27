@@ -57,6 +57,7 @@ async def init_db():
             """)
 
             # 2. Pokemon Species (New Table)
+            # Added columns for MSG stats: hp, attack, defense, sp_atk, sp_def, speed
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS pokemon_species (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,9 +72,25 @@ async def init_db():
                     can_mega BOOLEAN DEFAULT 0,
                     is_legendary BOOLEAN DEFAULT 0,
                     is_mythical BOOLEAN DEFAULT 0,
+                    hp INTEGER DEFAULT 0,
+                    attack INTEGER DEFAULT 0,
+                    defense INTEGER DEFAULT 0,
+                    sp_atk INTEGER DEFAULT 0,
+                    sp_def INTEGER DEFAULT 0,
+                    speed INTEGER DEFAULT 0,
                     UNIQUE(pokedex_num, form)
                 )
             """)
+
+            # Check for missing columns in pokemon_species and add them if necessary (simple migration)
+            async with db.execute("PRAGMA table_info(pokemon_species)") as cursor:
+                columns = [row['name'] for row in await cursor.fetchall()]
+
+            new_columns = ['hp', 'attack', 'defense', 'sp_atk', 'sp_def', 'speed']
+            for col in new_columns:
+                if col not in columns:
+                    logger.info(f"Adding missing column {col} to pokemon_species table.")
+                    await db.execute(f"ALTER TABLE pokemon_species ADD COLUMN {col} INTEGER DEFAULT 0")
 
             # 3. Listings
             # Changed pokemon_id (int) to species_id (FK)
@@ -219,7 +236,8 @@ async def get_account(account_id):
 # --- Pokemon Species ---
 
 async def upsert_pokemon_species(pokedex_num, name, form, type1, type2=None, image_url=None,
-                                 can_dynamax=False, can_gigantamax=False, can_mega=False):
+                                 can_dynamax=False, can_gigantamax=False, can_mega=False,
+                                 hp=0, attack=0, defense=0, sp_atk=0, sp_def=0, speed=0):
     """Inserts or updates a pokemon species."""
     async with get_db() as db:
         # Check if exists
@@ -230,17 +248,19 @@ async def upsert_pokemon_species(pokedex_num, name, form, type1, type2=None, ima
             # Update
             await db.execute("""
                 UPDATE pokemon_species
-                SET name=?, type1=?, type2=?, image_url=?, can_dynamax=?, can_gigantamax=?, can_mega=?
+                SET name=?, type1=?, type2=?, image_url=?, can_dynamax=?, can_gigantamax=?, can_mega=?,
+                    hp=?, attack=?, defense=?, sp_atk=?, sp_def=?, speed=?
                 WHERE id=?
-            """, (name, type1, type2, image_url, can_dynamax, can_gigantamax, can_mega, row['id']))
+            """, (name, type1, type2, image_url, can_dynamax, can_gigantamax, can_mega,
+                  hp, attack, defense, sp_atk, sp_def, speed, row['id']))
             await db.commit()
             return row['id']
         else:
             # Insert
             cursor = await db.execute("""
-                INSERT INTO pokemon_species (pokedex_num, name, form, type1, type2, image_url, can_dynamax, can_gigantamax, can_mega)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (pokedex_num, name, form, type1, type2, image_url, can_dynamax, can_gigantamax, can_mega))
+                INSERT INTO pokemon_species (pokedex_num, name, form, type1, type2, image_url, can_dynamax, can_gigantamax, can_mega, hp, attack, defense, sp_atk, sp_def, speed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (pokedex_num, name, form, type1, type2, image_url, can_dynamax, can_gigantamax, can_mega, hp, attack, defense, sp_atk, sp_def, speed))
             await db.commit()
             return cursor.lastrowid
 
@@ -272,6 +292,36 @@ async def search_pokemon_species(query, limit=25):
         like_query = f"{query}%"
         async with db.execute(sql, (like_query, like_query, limit)) as cursor:
             return await cursor.fetchall()
+
+async def search_pokemon_species_extended(query, limit=25):
+    """
+    Search for autocomplete by name, type, or stat match (broad search).
+    Query logic:
+    - If query matches a type (e.g. "Fire"), return Fire types.
+    - Else search by name.
+    """
+    async with get_db() as db:
+        like_query = f"%{query}%"
+
+        # Check if query matches a known type (simple check)
+        # We can just do a giant OR
+        sql = """
+            SELECT * FROM pokemon_species
+            WHERE name LIKE ?
+               OR (name || ' ' || form) LIKE ?
+               OR type1 LIKE ?
+               OR type2 LIKE ?
+            ORDER BY pokedex_num ASC
+            LIMIT ?
+        """
+        async with db.execute(sql, (like_query, like_query, like_query, like_query, limit)) as cursor:
+            return await cursor.fetchall()
+
+async def get_pokemon_species_by_id(species_id):
+    """Get species by ID."""
+    async with get_db() as db:
+        async with db.execute("SELECT * FROM pokemon_species WHERE id = ?", (species_id,)) as cursor:
+            return await cursor.fetchone()
 
 # --- Listings ---
 
