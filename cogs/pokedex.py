@@ -105,6 +105,19 @@ class Pokedex(commands.Cog):
         if species['image_url']:
             embed.set_thumbnail(url=species['image_url'])
 
+        # Best Moveset
+        if 'best_moveset' in species and species['best_moveset']:
+            try:
+                moveset = json.loads(species['best_moveset'])
+                if moveset:
+                    moveset_text = f"⚔️ {moveset.get('fast_move', '?')} + {moveset.get('charged_move', '?')}\n"
+                    moveset_text += f"**DPS:** {moveset.get('dps', '?')} | **TDO:** {moveset.get('tdo', '?')}"
+                    if moveset.get('weather'):
+                        moveset_text += f" | **Weather:** {moveset.get('weather')}"
+                    embed.add_field(name="Best Moveset", value=moveset_text, inline=False)
+            except json.JSONDecodeError:
+                pass
+
         # Tier Ranking
         if 'tier_data' in species and species['tier_data']:
             try:
