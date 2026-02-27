@@ -122,8 +122,8 @@ class Listings(commands.Cog):
     async def pokemon_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         current = current.lower()
 
-        # Use extended search (Name or Type)
-        results = await database.search_pokemon_species_extended(current, limit=25)
+        # Use extended search (Name or Type), excluding Mega variants
+        results = await database.search_pokemon_species_extended(current, limit=25, exclude_mega=True)
         choices = []
         for r in results:
             name = r['name']

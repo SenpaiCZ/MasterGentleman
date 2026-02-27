@@ -208,7 +208,7 @@ class ImageGenerator:
                 img.paste(qr, (qr_x, qr_y))
 
                 # FC Text: Left of QR
-                fc_text = f"FC: {friend_code}"
+                fc_text = f"{friend_code}"
 
                 # Align right side of text to left side of QR (with 10px padding)
                 fc_x = qr_x - 10
