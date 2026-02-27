@@ -320,49 +320,24 @@ class Listings(commands.Cog):
         # pokemon is now expected to be the Species ID (as string) from autocomplete
         # OR a raw name if user typed something else.
 
-        species_id = None
-        pokemon_name = ""
+        species_data = None
 
         if pokemon.isdigit():
             species_id = int(pokemon)
-            # Fetch name
-            # We don't have get_species_by_id yet exposed in this Cog, but we can query or trust it exists
-            # Ideally verify.
-            # Let's add get_pokemon_species_by_id to database.py?
-            # Or just use raw sql here? Better to be safe.
-            # Assuming if it's digit, it's from autocomplete.
-
-            # We can use database.get_db() context to verify
-            # Or just let the ListingDraftView handle visual confirmation.
-
-            # We need the name for the View title though.
-            # ListingDraftView constructor expects pokemon_name.
-            pass
+            species_data = await database.get_pokemon_species_by_id(species_id)
         else:
             # Try to resolve by name
-            row = await database.get_pokemon_species_by_name(pokemon)
-            if row:
-                species_id = row['id']
-                pokemon_name = row['name']
-                if row['form'] != 'Normal':
-                    pokemon_name += f" ({row['form']})"
-            else:
-                await interaction.response.send_message(f"❌ Neznámý Pokémon '{pokemon}'. Prosím vyberte ze seznamu.", ephemeral=True)
-                return
+            species_data = await database.get_pokemon_species_by_name(pokemon)
 
-        # If we have species_id but not name (from autocomplete ID)
-        if species_id and not pokemon_name:
-             # We need to fetch the name.
-             async with database.get_db() as db:
-                 async with db.execute("SELECT name, form FROM pokemon_species WHERE id = ?", (species_id,)) as cursor:
-                     row = await cursor.fetchone()
-                     if row:
-                         pokemon_name = row['name']
-                         if row['form'] != 'Normal':
-                             pokemon_name += f" ({row['form']})"
-                     else:
-                         await interaction.response.send_message("❌ Chyba: Pokémon nenalezen v DB.", ephemeral=True)
-                         return
+        if not species_data:
+            await interaction.response.send_message(f"❌ Neznámý Pokémon nebo chyba databáze.", ephemeral=True)
+            return
+
+        species_id = species_data['id']
+        pokedex_num = species_data['pokedex_num']
+        pokemon_name = species_data['name']
+        if species_data['form'] != 'Normal':
+            pokemon_name += f" ({species_data['form']})"
 
         accounts = await database.get_user_accounts(interaction.user.id)
         if not accounts:
@@ -372,8 +347,11 @@ class Listings(commands.Cog):
         view = ListingDraftView(
             interaction,
             listing_type,
-            species_id, # passing species_id as pokemon_id
+            species_id,
+            pokedex_num,
             pokemon_name,
+            species_data.get('image_url'),
+            species_data.get('shiny_image_url'),
             accounts,
             initial_details=popis,
             submit_callback=self.create_listing_final
@@ -511,8 +489,11 @@ class Listings(commands.Cog):
         draft_view = ListingDraftView(
             interaction,
             listing['listing_type'],
-            listing['species_id'], # listing now has species_id column
+            listing['species_id'],
+            listing['pokemon_id'], # This is actually pokedex_num in the query result alias
             pokemon_name,
+            listing.get('image_url'),
+            listing.get('shiny_image_url'),
             accounts,
             initial_details=listing['details'],
             submit_callback=submit_cb
