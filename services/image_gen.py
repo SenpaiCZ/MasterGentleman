@@ -129,15 +129,16 @@ class ImageGenerator:
         # Dimensions
         CELL_W, CELL_H = 120, 150
         MARGIN = 20
-        HEADER_H = 40 # Increased height for name inside header
-        QR_SIZE = 100
-        QR_PADDING = 10
+        HEADER_H = 60 # Increased height for QR code
+
+        # QR in Header
+        QR_SIZE = 50 # Smaller QR for header
+
         TITLE_H = 20
         FOOTER_H = 30
 
-        # QR Section Height (QR + Padding + Title)
-        qr_height = QR_SIZE + 5 if friend_code else 0
-        TOP_SECTION_H = HEADER_H + QR_PADDING + qr_height + TITLE_H + 10
+        # Title Section Height (Title + Padding)
+        TOP_SECTION_H = HEADER_H + 10 + TITLE_H + 10
 
         IMG_W = cols * CELL_W + 2 * MARGIN
         IMG_H = TOP_SECTION_H + rows * CELL_H + MARGIN + FOOTER_H
@@ -149,8 +150,9 @@ class ImageGenerator:
         # --- Fonts ---
         try:
             # Reduced font sizes as requested
-            font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 12)
-            font_user = ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
+            font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 16) # Slightly larger title
+            font_user = ImageFont.truetype("DejaVuSans-Bold.ttf", 18) # Larger user name
+            font_fc = ImageFont.truetype("DejaVuSans-Bold.ttf", 12)   # Font for FC next to QR
             font_text = ImageFont.truetype("DejaVuSans.ttf", 14)
             font_small = ImageFont.truetype("DejaVuSans.ttf", 10)
             font_badge = ImageFont.truetype("DejaVuSans-Bold.ttf", 10)
@@ -158,6 +160,7 @@ class ImageGenerator:
         except OSError:
             font_title = ImageFont.load_default()
             font_user = ImageFont.load_default()
+            font_fc = ImageFont.load_default()
             font_text = ImageFont.load_default()
             font_small = ImageFont.load_default()
             font_badge = ImageFont.load_default()
@@ -167,24 +170,35 @@ class ImageGenerator:
         # Team Colored Strip
         draw.rectangle([(0, 0), (IMG_W, HEADER_H)], fill=team_color_rgb)
 
-        # User Name inside Header (Right Aligned)
-        draw.text((IMG_W - MARGIN, HEADER_H / 2), user_name, font=font_user, fill=(255, 255, 255), anchor="rm")
+        # User Name inside Header (Left Aligned)
+        draw.text((MARGIN, HEADER_H / 2), user_name, font=font_user, fill=(255, 255, 255), anchor="lm")
 
-        # --- QR Code & Title Section ---
-        current_y = HEADER_H + QR_PADDING
-
+        # --- QR Code & FC in Header ---
         if friend_code:
             try:
                 qr = qrcode.make(friend_code)
                 qr = qr.resize((QR_SIZE, QR_SIZE), Image.Resampling.LANCZOS)
-                # Paste QR code centered
-                qr_x = (IMG_W - QR_SIZE) // 2
-                img.paste(qr, (qr_x, current_y))
+
+                # Position: Right side with margin
+                qr_x = IMG_W - MARGIN - QR_SIZE
+                qr_y = (HEADER_H - QR_SIZE) // 2
+
+                img.paste(qr, (qr_x, qr_y))
+
+                # FC Text: Left of QR
+                fc_text = f"FC: {friend_code}"
+
+                # Align right side of text to left side of QR (with 10px padding)
+                fc_x = qr_x - 10
+                fc_y = HEADER_H / 2
+
+                draw.text((fc_x, fc_y), fc_text, font=font_fc, fill=(255, 255, 255), anchor="rm")
+
             except Exception as e:
                 logger.error(f"Error generating QR code: {e}")
-            current_y += QR_SIZE + 5
 
-        # Title (Centered below QR)
+        # --- Title Section ---
+        current_y = HEADER_H + 10
         draw.text((IMG_W // 2, current_y), title, font=font_title, fill=(255, 255, 255), anchor="mt")
 
         # --- Grid ---
