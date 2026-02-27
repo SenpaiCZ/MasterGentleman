@@ -29,7 +29,7 @@ REGIONS = [
     "Zlínský kraj"
 ]
 
-async def save_user_registration(interaction, friend_code, team, region, account_name, is_main):
+async def save_user_registration(interaction, friend_code, team, region, account_name, is_main, want_more_friends=False):
     """Helper to save user and update roles."""
     # Show loading state first
     if not interaction.response.is_done():
@@ -44,7 +44,8 @@ async def save_user_registration(interaction, friend_code, team, region, account
             team,
             region,
             account_name,
-            is_main
+            is_main,
+            want_more_friends
         )
     except Exception as e:
         logger.error(f"Error saving user registration: {e}")
@@ -57,9 +58,11 @@ async def save_user_registration(interaction, friend_code, team, region, account
         await cog.sync_roles_with_main_account(interaction.guild, interaction.user)
 
     type_str = "Hlavní" if is_main else "Rodina/Přátelé"
+    friends_str = "\n🤝 **Hledá přátele:** Ano" if want_more_friends else ""
+
     embed = discord.Embed(
         title="✅ Registrace Dokončena",
-        description=f"**Účet:** {account_name} ({type_str})\n**FC:** `{friend_code}`\n**Tým:** {team}\n**Region:** {region}",
+        description=f"**Účet:** {account_name} ({type_str})\n**FC:** `{friend_code}`\n**Tým:** {team}\n**Region:** {region}{friends_str}",
         color=TEAMS.get(team, discord.Color.green())
     )
     embed.set_footer(text="Tip: Použijte /nabidka pro přidání Pokémonů.")
@@ -67,11 +70,13 @@ async def save_user_registration(interaction, friend_code, team, region, account
     await interaction.edit_original_response(content="", embed=embed, view=None)
 
 class AccountTypeSelect(ui.Select):
-    def __init__(self, friend_code, team, region, account_name):
+    def __init__(self, friend_code, team, region, account_name, want_more_friends):
         self.friend_code = friend_code
         self.team = team
         self.region = region
         self.account_name = account_name
+        self.want_more_friends = want_more_friends
+
         options = [
             discord.SelectOption(label="Hlavní účet (Main)", value="True", description="Toto bude můj hlavní účet"),
             discord.SelectOption(label="Účet pro dalšího hráče bez Discordu", value="False", description="Např. pro rodinu nebo přátele")
@@ -80,32 +85,100 @@ class AccountTypeSelect(ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         is_main = self.values[0] == "True"
-        await save_user_registration(interaction, self.friend_code, self.team, self.region, self.account_name, is_main)
+        await save_user_registration(
+            interaction,
+            self.friend_code,
+            self.team,
+            self.region,
+            self.account_name,
+            is_main,
+            self.want_more_friends
+        )
 
 class AccountTypeView(ui.View):
-    def __init__(self, friend_code, team, region, account_name):
+    def __init__(self, friend_code, team, region, account_name, want_more_friends):
         super().__init__()
-        self.add_item(AccountTypeSelect(friend_code, team, region, account_name))
+        self.add_item(AccountTypeSelect(friend_code, team, region, account_name, want_more_friends))
 
-class EventNotificationView(ui.View):
-    def __init__(self, friend_code, team, region, account_name):
+class FriendsPreferenceView(ui.View):
+    def __init__(self, friend_code, team, region, account_name, mode):
         super().__init__()
         self.friend_code = friend_code
         self.team = team
         self.region = region
         self.account_name = account_name
+        self.mode = mode
+
+    @ui.button(label="Ano, hledám přátele", style=discord.ButtonStyle.success, emoji="🤝")
+    async def yes_friends(self, interaction: discord.Interaction, button: ui.Button):
+        await self._next_step(interaction, True)
+
+    @ui.button(label="Ne, díky", style=discord.ButtonStyle.secondary, emoji="🙅")
+    async def no_friends(self, interaction: discord.Interaction, button: ui.Button):
+        await self._next_step(interaction, False)
+
+    async def _next_step(self, interaction, want_friends):
+        if self.mode == "REGISTER":
+            # Ask for Notifications
+            embed = discord.Embed(
+                title="Krok 4: Upozornění na Eventy",
+                description=f"Chcete dostávat upozornění na blížící se události (Eventy)?",
+                color=TEAMS.get(self.team, discord.Color.light_grey())
+            )
+            await interaction.response.edit_message(
+                content="",
+                embed=embed,
+                view=EventNotificationView(self.friend_code, self.team, self.region, self.account_name, want_friends)
+            )
+        else:
+            # ADD_ACCOUNT: Ask for Main/Alt
+            embed = discord.Embed(
+                title="Krok 4/4: Typ Účtu",
+                description=f"Je tento účet váš hlavní, nebo pro dalšího hráče?",
+                color=TEAMS.get(self.team, discord.Color.light_grey())
+            )
+            await interaction.response.edit_message(
+                content="",
+                embed=embed,
+                view=AccountTypeView(self.friend_code, self.team, self.region, self.account_name, want_friends)
+            )
+
+class EventNotificationView(ui.View):
+    def __init__(self, friend_code, team, region, account_name, want_more_friends):
+        super().__init__()
+        self.friend_code = friend_code
+        self.team = team
+        self.region = region
+        self.account_name = account_name
+        self.want_more_friends = want_more_friends
 
     @ui.button(label="Ano, chci upozornění", style=discord.ButtonStyle.success, emoji="🔔")
     async def yes_notifications(self, interaction: discord.Interaction, button: ui.Button):
         # Defer immediately to allow time for role update
         await interaction.response.defer()
         await self._toggle_role(interaction, True)
-        await save_user_registration(interaction, self.friend_code, self.team, self.region, self.account_name, is_main=True)
+        await save_user_registration(
+            interaction,
+            self.friend_code,
+            self.team,
+            self.region,
+            self.account_name,
+            is_main=True,
+            want_more_friends=self.want_more_friends
+        )
 
     @ui.button(label="Ne, děkuji", style=discord.ButtonStyle.secondary, emoji="🔕")
     async def no_notifications(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer()
-        await save_user_registration(interaction, self.friend_code, self.team, self.region, self.account_name, is_main=True)
+        await save_user_registration(
+            interaction,
+            self.friend_code,
+            self.team,
+            self.region,
+            self.account_name,
+            is_main=True,
+            want_more_friends=self.want_more_friends
+        )
 
     async def _toggle_role(self, interaction, enable):
         if not interaction.guild:
@@ -137,30 +210,17 @@ class RegionSelect(ui.Select):
     async def callback(self, interaction: discord.Interaction):
         region = self.values[0]
 
-        if self.mode == "REGISTER":
-            # Ask for Notifications
-            embed = discord.Embed(
-                title="Krok 3: Upozornění na Eventy",
-                description=f"Vybrán region: **{region}**.\n\nChcete dostávat upozornění na blížící se události (Eventy)?",
-                color=TEAMS.get(self.team, discord.Color.light_grey())
-            )
-            await interaction.response.edit_message(
-                content="",
-                embed=embed,
-                view=EventNotificationView(self.friend_code, self.team, region, self.account_name)
-            )
-        else:
-            # ADD_ACCOUNT: Ask for Main/Alt
-            embed = discord.Embed(
-                title="Krok 3/3: Typ Účtu",
-                description=f"Vybrán region: **{region}**.\nJe tento účet váš hlavní, nebo pro dalšího hráče?",
-                color=TEAMS.get(self.team, discord.Color.light_grey())
-            )
-            await interaction.response.edit_message(
-                content="",
-                embed=embed,
-                view=AccountTypeView(self.friend_code, self.team, region, self.account_name)
-            )
+        # New Step: Ask for Friends Preference
+        embed = discord.Embed(
+            title="Krok 3: Hledáte přátele?",
+            description=f"Vybrán region: **{region}**.\n\nChcete být uvedeni na seznamu hráčů, kteří hledají nové přátele (pro výměnu dárků atd.)?",
+            color=TEAMS.get(self.team, discord.Color.light_grey())
+        )
+        await interaction.response.edit_message(
+            content="",
+            embed=embed,
+            view=FriendsPreferenceView(self.friend_code, self.team, region, self.account_name, self.mode)
+        )
 
 class RegionSelectView(ui.View):
     def __init__(self, friend_code, team, account_name, mode):
@@ -270,9 +330,12 @@ class AddAccountModal(ui.Modal, title="Přidat další účet"):
         )
 
 async def show_update_actions(interaction, account):
+    # Determine friends status
+    friends_status = "Ano" if account.get('want_more_friends') else "Ne"
+
     embed = discord.Embed(
         title=f"Úprava účtu: {account['account_name']}",
-        description=f"**FC:** {account['friend_code']}\n**Tým:** {account['team']}\n**Region:** {account['region']}",
+        description=f"**FC:** {account['friend_code']}\n**Tým:** {account['team']}\n**Region:** {account['region']}\n**Hledá přátele:** {friends_status}",
         color=TEAMS.get(account['team'], discord.Color.default())
     )
     view = UpdateActionSelectView(account)
@@ -320,7 +383,8 @@ class UpdateActionSelect(ui.Select):
             discord.SelectOption(label="Změnit Jméno (Name)", value="name", description="Upravit In-Game Name"),
             discord.SelectOption(label="Změnit Friend Code", value="fc", description="Upravit Friend Code"),
             discord.SelectOption(label="Změnit Tým (Team)", value="team", description="Změnit herní tým"),
-            discord.SelectOption(label="Změnit Region", value="region", description="Změnit region hraní")
+            discord.SelectOption(label="Změnit Region", value="region", description="Změnit region hraní"),
+            discord.SelectOption(label="Nastavení přátel", value="friends", description="Zapnout/Vypnout hledání přátel")
         ]
         super().__init__(placeholder="Co chcete upravit?", min_values=1, max_values=1, options=options)
 
@@ -334,6 +398,8 @@ class UpdateActionSelect(ui.Select):
             await interaction.response.send_message("Vyberte nový tým:", view=UpdateTeamView(self.account), ephemeral=True)
         elif action == "region":
             await interaction.response.send_message("Vyberte nový region:", view=UpdateRegionView(self.account), ephemeral=True)
+        elif action == "friends":
+            await interaction.response.send_message("Chcete hledat nové přátele?", view=UpdateFriendsView(self.account), ephemeral=True)
 
 class UpdateActionSelectView(ui.View):
     def __init__(self, account):
@@ -417,6 +483,21 @@ class UpdateRegionView(ui.View):
     def __init__(self, account):
         super().__init__()
         self.add_item(UpdateRegionSelect(account))
+
+class UpdateFriendsView(ui.View):
+    def __init__(self, account):
+        super().__init__()
+        self.account = account
+
+    @ui.button(label="Ano (Zapnout)", style=discord.ButtonStyle.success, emoji="✅")
+    async def enable_friends(self, interaction: discord.Interaction, button: ui.Button):
+        await database.update_user_account(self.account['id'], want_more_friends=True)
+        await confirm_update(interaction, self.account, "Hledá přátele", "Ano")
+
+    @ui.button(label="Ne (Vypnout)", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def disable_friends(self, interaction: discord.Interaction, button: ui.Button):
+        await database.update_user_account(self.account['id'], want_more_friends=False)
+        await confirm_update(interaction, self.account, "Hledá přátele", "Ne")
 
 class Registration(commands.Cog):
     def __init__(self, bot):
@@ -533,6 +614,23 @@ class Registration(commands.Cog):
             # Show selection view
             view = UpdateAccountSelectView(accounts)
             await interaction.response.send_message("Vyberte účet k úpravě:", view=view, ephemeral=True)
+
+    @app_commands.command(name="chci_vice_pratel", description="Přepnout stav 'Hledám více přátel' (Toggle Friends)")
+    async def chci_vice_pratel(self, interaction: discord.Interaction):
+        """Rychle přepne stav hledání přátel pro hlavní účet."""
+        accounts = await database.get_user_accounts(interaction.user.id)
+        if not accounts:
+            await interaction.response.send_message("❌ Nemáte žádný účet.", ephemeral=True)
+            return
+
+        # Use main account or first account
+        account = next((acc for acc in accounts if acc['is_main']), accounts[0])
+
+        new_status = not account['want_more_friends']
+        await database.update_user_account(account['id'], want_more_friends=new_status)
+
+        status_text = "✅ Nyní jste na seznamu hráčů hledajících přátele." if new_status else "❌ Byl jste odebrán ze seznamu hráčů hledajících přátele."
+        await interaction.response.send_message(status_text, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Registration(bot))
