@@ -1,8 +1,10 @@
 from discord.ext import commands
+import discord
 import os
 import sys
 import logging
 import asyncio
+import database
 
 logger = logging.getLogger('discord')
 
@@ -135,6 +137,39 @@ class Admin(commands.Cog):
         except Exception as e:
             logger.error(f"Update failed: {e}")
             await msg.edit(content=f"An error occurred: {e}")
+
+    @commands.command()
+    async def backup(self, ctx):
+        """Sends a backup of the database to the bot owner."""
+        # Check if user is owner
+        is_owner = await self.bot.is_owner(ctx.author)
+        if not is_owner:
+            # Fallback: check application info directly
+            app_info = await self.bot.application_info()
+            if ctx.author.id != app_info.owner.id:
+                return await ctx.send("You do not have permission to use this command.")
+
+        try:
+            db_file = database.DB_NAME
+            if not os.path.exists(db_file):
+                return await ctx.send("Database file not found.")
+
+            app_info = await self.bot.application_info()
+            owner = app_info.owner
+
+            await owner.send(
+                content="Here is the database backup.",
+                file=discord.File(db_file)
+            )
+            await ctx.send("Backup sent to owner's DM.")
+            logger.info(f"Database backup sent to {owner}.")
+
+        except discord.Forbidden:
+            await ctx.send("Could not send DM to owner. Please check privacy settings.")
+            logger.error("Could not send DM to owner.")
+        except Exception as e:
+            await ctx.send(f"An error occurred: {e}")
+            logger.error(f"Backup failed: {e}")
 
 async def setup(bot):
     await bot.add_cog(Admin(bot))
