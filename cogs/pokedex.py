@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import database
 import logging
+import json
 
 logger = logging.getLogger('discord')
 
@@ -95,19 +96,35 @@ class Pokedex(commands.Cog):
         if 'max_cp' in species and species['max_cp'] > 0:
             description += f"\n💪 **Max CP (Lvl 50):** {species['max_cp']}"
 
+        # Add Buddy Distance if available
+        if 'buddy_distance' in species and species['buddy_distance'] > 0:
+            description += f"\n🚶 **Buddy Distance:** {species['buddy_distance']} km"
+
         embed = discord.Embed(title=title, description=description, color=embed_color)
 
         if species['image_url']:
-            # Set as main image as requested
-            embed.set_image(url=species['image_url'])
-            # Also keep thumbnail for better layout if main image is large?
-            # User said "Small thumbnail is good enough, but there was no image last time I tried..."
-            # Let's use set_thumbnail as primary if the image is small icon-like, but GO Hub images are often large.
-            # If we want to guarantee visibility, set_image is safer for large art.
-            # However, standard Pokedex often uses Thumbnail.
-            # Let's stick to set_thumbnail as per user saying "Small thumbnail is good enough"
-            # BUT ensure it's actually working.
             embed.set_thumbnail(url=species['image_url'])
+
+        # Tier Ranking
+        if 'tier_data' in species and species['tier_data']:
+            try:
+                rankings = json.loads(species['tier_data'])
+                if rankings:
+                    tier_text = ""
+                    for rank in rankings:
+                        category = rank['category']
+                        tier = rank['tier']
+                        ranking_num = rank['rank']
+
+                        line = f"**{category}:** {tier}"
+                        if ranking_num:
+                            line += f" ({ranking_num})"
+                        tier_text += line + "\n"
+
+                    if tier_text:
+                        embed.add_field(name="Tier Ranking", value=tier_text, inline=False)
+            except json.JSONDecodeError:
+                pass
 
         # Features
         features = []
