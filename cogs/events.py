@@ -63,6 +63,80 @@ class Events(commands.Cog):
             except discord.Forbidden:
                 await interaction.response.send_message("❌ Nemám oprávnění spravovat tuto roli.", ephemeral=True)
 
+    udalosti_group = app_commands.Group(name="udalosti", description="Příkazy pro události (Events)")
+
+    @udalosti_group.command(name="tyden", description="Zobrazit eventy na příštích 7 dní (Next 7 days)")
+    async def udalosti_tyden(self, interaction: discord.Interaction):
+        """Zobrazí přehled událostí na příštích 7 dní."""
+        await interaction.response.defer(ephemeral=True)
+
+        now = datetime.datetime.now(TZ_PRAGUE)
+        start_ts = now.timestamp()
+        end_dt = now + datetime.timedelta(days=7)
+        end_ts = end_dt.timestamp()
+
+        upcoming_events = await database.get_upcoming_events(start_ts, end_ts)
+
+        if not upcoming_events:
+            await interaction.followup.send("❌ Žádné nadcházející eventy na příštích 7 dní.", ephemeral=True)
+            return
+
+        embed = self._create_summary_embed(upcoming_events, "📅 Přehled Eventů (7 Dní)")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @udalosti_group.command(name="dnes", description="Zobrazit dnešní eventy (Today's Events)")
+    async def udalosti_dnes(self, interaction: discord.Interaction):
+        """Zobrazí eventy pro dnešní den."""
+        await interaction.response.defer(ephemeral=True)
+
+        now = datetime.datetime.now(TZ_PRAGUE)
+
+        # Start of day
+        start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_ts = start_dt.timestamp()
+
+        # End of day
+        end_dt = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        end_ts = end_dt.timestamp()
+
+        upcoming_events = await database.get_upcoming_events(start_ts, end_ts)
+
+        if not upcoming_events:
+            await interaction.followup.send("❌ Žádné eventy pro dnešní den.", ephemeral=True)
+            return
+
+        embed = self._create_summary_embed(upcoming_events, "📅 Dnešní Eventy")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    def _create_summary_embed(self, events, title):
+        embed = discord.Embed(
+            title=title,
+            color=discord.Color.blue()
+        )
+
+        events_by_day = {}
+        for e in events:
+            dt = datetime.datetime.fromtimestamp(e['start_time'], datetime.timezone.utc).astimezone(TZ_PRAGUE)
+
+            day_name_en = dt.strftime("%A")
+            day_name_cz = self.translate_day(day_name_en)
+            day_key = f"{day_name_cz} {dt.strftime('%d.%m.')}"
+
+            if day_key not in events_by_day:
+                events_by_day[day_key] = []
+            events_by_day[day_key].append(e)
+
+        for day, evs in events_by_day.items():
+            lines = []
+            for e in evs:
+                time_str = f"<t:{int(e['start_time'])}:t>" # Short time (12:00)
+                link_md = f"[{e['name']}]({e['link']})" if e['link'] else e['name']
+                lines.append(f"• {time_str} {link_md}")
+
+            embed.add_field(name=day, value="\n".join(lines), inline=False)
+
+        return embed
+
     # --- Tasks ---
 
     @tasks.loop(time=datetime.time(hour=3, minute=0, tzinfo=TZ_PRAGUE))
@@ -86,46 +160,19 @@ class Events(commands.Cog):
     async def notification_task(self):
         now_ts = datetime.datetime.now(datetime.timezone.utc).timestamp()
 
-        # 2 Hours Before (range: now+2h-1m to now+2h+1m is tricky with discrete checks)
-        # Better: check for events starting between [now + 1h 59m, now + 2h 00m]
-        # Or simply: check events starting < now + 2h AND > now (don't notify past) AND notified=0
-        # But we want to notify roughly 2h before.
-        # So we query for start_time <= now + 2h AND start_time > now + 1h 50m ?
-        # Actually, let's use a small window. If we run every minute, window of 2 mins is enough.
-        # But if bot is down, we miss it.
-        # Robust way: start_time < now + 2h AND start_time > now AND notified_2h = 0.
-        # This will notify even if we are late (e.g. 1h 50m before), which is better than missing.
-        # But we don't want to notify if it's 5 mins before (that's the 5m warning).
-        # So for 2h warning: start_time <= now + 125 mins AND start_time > now + 30 mins.
-
-        target_2h = now_ts + 2 * 3600 # 2 hours from now
-        # Look for events that start soon (within next 2h + buffer) but haven't been notified
-        # Let's say we notify if it starts within [1h 55m, 2h 05m] from now.
-        # window_start = target_2h - 300
-        # window_end = target_2h + 300
-
-        # Actually, "Every event will have notification 2h before start."
-        # If I use "start_time <= now + 2h", I catch it immediately when it enters the window.
-        # To avoid notifying too late (e.g. restart after downtime), maybe limit the window.
-        # Let's say: Notify if start_time is in [now + 90min, now + 130min].
-
+        # 2h Warning: [now + 90min, now + 130min]
         events_2h = await database.get_events_for_notification(now_ts + 90*60, now_ts + 130*60, '2h')
         for event in events_2h:
             await self._send_notification(event, '2h')
             await database.mark_event_notified(event['id'], '2h')
 
-        # 5 Minutes Before
-        # Window: [now + 1min, now + 10min]
+        # 5m Warning: [now + 1min, now + 10min]
         events_5m = await database.get_events_for_notification(now_ts + 1*60, now_ts + 10*60, '5m')
         for event in events_5m:
             await self._send_notification(event, '5m')
             await database.mark_event_notified(event['id'], '5m')
 
     async def _send_notification(self, event, notif_type):
-        # We need to find which guilds to notify. Assuming single guild or iteration.
-        # But `guild_config` is by guild_id.
-        # We don't have a list of guilds in DB, but we can iterate over bot.guilds
-
         for guild in self.bot.guilds:
             config = await database.get_guild_config(guild.id)
             if not config or not config['event_channel_id']:
@@ -138,17 +185,9 @@ class Events(commands.Cog):
             role = guild.get_role(config['event_role_id']) if config['event_role_id'] else None
             role_mention = role.mention if role else ""
 
-            # Embed
             time_str = "2 hodiny" if notif_type == '2h' else "5 minut"
             title_prefix = "⏰ Začíná za"
 
-            # Format start time
-            # Convert timestamp to DT with Prague TZ
-            dt_start = datetime.datetime.fromtimestamp(event['start_time'], datetime.timezone.utc).astimezone(TZ_PRAGUE)
-            start_str = dt_start.strftime("%H:%M") # Today?
-
-            # If notification is 2h before, it might be different day? Unlikely for 2h/5m.
-            # But just in case, use Discord relative timestamp
             discord_ts = f"<t:{int(event['start_time'])}:R>"
 
             embed = discord.Embed(
@@ -180,13 +219,9 @@ class Events(commands.Cog):
 
         logger.info("Running weekly summary task.")
 
-        # Calculate range: Next Monday 00:00 to Next Sunday 23:59
         today = now.date()
         next_monday = today + datetime.timedelta(days=1)
         next_sunday = next_monday + datetime.timedelta(days=6)
-
-        # Create timestamps (naive -> localize -> timestamp)
-        # Assuming database timestamps are UTC
 
         start_dt = datetime.datetime.combine(next_monday, datetime.time.min)
         start_dt_aware = TZ_PRAGUE.localize(start_dt)
@@ -202,41 +237,11 @@ class Events(commands.Cog):
             logger.info("No upcoming events for next week.")
             return
 
-        # Build Embeds (grouped or list)
-        # If too many events, might need multiple embeds?
-        # For now, one embed.
-
-        embed = discord.Embed(
-            title="📅 Přehled Eventů na Příští Týden",
-            description=f"Od {next_monday.strftime('%d.%m.')} do {next_sunday.strftime('%d.%m.')}",
-            color=discord.Color.blue()
+        embed = self._create_summary_embed(
+            upcoming_events,
+            f"📅 Přehled Eventů na Příští Týden ({next_monday.strftime('%d.%m.')} - {next_sunday.strftime('%d.%m.')})"
         )
 
-        # Group by day
-        events_by_day = {}
-        for e in upcoming_events:
-            dt = datetime.datetime.fromtimestamp(e['start_time'], datetime.timezone.utc).astimezone(TZ_PRAGUE)
-            day_key = dt.strftime("%A %d.%m.") # e.g. Monday 25.02.
-            # Localize day names?
-            # We can map %A to Czech names
-            day_name_en = dt.strftime("%A")
-            day_name_cz = self.translate_day(day_name_en)
-            day_key = f"{day_name_cz} {dt.strftime('%d.%m.')}"
-
-            if day_key not in events_by_day:
-                events_by_day[day_key] = []
-            events_by_day[day_key].append(e)
-
-        for day, events in events_by_day.items():
-            lines = []
-            for e in events:
-                time_str = f"<t:{int(e['start_time'])}:t>" # Short time (12:00)
-                link_md = f"[{e['name']}]({e['link']})" if e['link'] else e['name']
-                lines.append(f"• {time_str} {link_md}")
-
-            embed.add_field(name=day, value="\n".join(lines), inline=False)
-
-        # Send to all configured channels
         for guild in self.bot.guilds:
             config = await database.get_guild_config(guild.id)
             if not config or not config['event_channel_id']:
@@ -246,7 +251,6 @@ class Events(commands.Cog):
             if not channel:
                 continue
 
-            # Maybe ping role here too?
             role = guild.get_role(config['event_role_id']) if config['event_role_id'] else None
             role_mention = role.mention if role else ""
 
@@ -266,7 +270,6 @@ class Events(commands.Cog):
     @scrape_task.before_loop
     async def before_scrape(self):
         await self.bot.wait_until_ready()
-        # Run once on startup
         logger.info("Running initial scrape on boot.")
         await self._run_scrape()
 

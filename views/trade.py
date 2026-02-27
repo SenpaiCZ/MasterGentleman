@@ -19,6 +19,11 @@ class TradeView(discord.ui.View):
         listing_a = await database.get_listing(trade['listing_a_id'])
         listing_b = await database.get_listing(trade['listing_b_id'])
 
+        # Check if listings still exist (might have been deleted if count reached 0 separately?)
+        if not listing_a or not listing_b:
+             await interaction.response.send_message("❌ Jeden ze záznamů již neexistuje.", ephemeral=True)
+             return None, None, None
+
         # Verify user is a participant
         if interaction.user.id not in (listing_a['user_id'], listing_b['user_id']):
             await interaction.response.send_message("⛔ Nemáte oprávnění k této akci.", ephemeral=True)
@@ -32,23 +37,36 @@ class TradeView(discord.ui.View):
         if not trade:
             return
 
-        # Double check intent
-        # Ideally, we should require confirmation from both? For MVP, one is enough.
-
+        # Decrement Logic
         try:
-            # Delete listings
-            await database.delete_listing(listing_a['id'])
-            await database.delete_listing(listing_b['id'])
+            # Listing A
+            count_a = listing_a.get('count', 1)
+            new_count_a = count_a - 1
+            if new_count_a <= 0:
+                await database.delete_listing(listing_a['id'])
+            else:
+                await database.update_listing_count(listing_a['id'], new_count_a)
+                # If we keep it, we should set status back to ACTIVE if we want it to be matchable again?
+                # "decrees by one on trade" - usually implies the remaining stock is still available.
+                # But current trade logic sets status to 'PENDING' (via matched/locked state?).
+                # Wait, status in DB is used. `matcher` finds 'ACTIVE'.
+                # We need to set it back to ACTIVE so it can be matched again.
+                await database.update_listing_status(listing_a['id'], 'ACTIVE')
+
+            # Listing B
+            count_b = listing_b.get('count', 1)
+            new_count_b = count_b - 1
+            if new_count_b <= 0:
+                await database.delete_listing(listing_b['id'])
+            else:
+                await database.update_listing_count(listing_b['id'], new_count_b)
+                await database.update_listing_status(listing_b['id'], 'ACTIVE')
 
             # Close trade
             await database.close_trade(trade['id'])
 
             await interaction.response.send_message("✅ Obchod byl úspěšně dokončen! Kanál bude smazán za 5 sekund. (Trade Completed)")
 
-            # Delete channel after delay
-            # We can use delete(delay=5) on channel, but interaction doesn't expose that directly on response.
-            # We can use asyncio.sleep
-            # Note: Using create_task to avoid blocking
             await asyncio.sleep(5)
             await interaction.channel.delete()
 

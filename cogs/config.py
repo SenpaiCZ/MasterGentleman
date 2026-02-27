@@ -13,6 +13,7 @@ class Config(commands.Cog):
     setup_group = app_commands.Group(name="setup", description="Nastavení bota")
     events_group = app_commands.Group(name="udalosti", description="Nastavení upozornění na Pokémon GO eventy", parent=setup_group)
     trade_group = app_commands.Group(name="trade", description="Nastavení obchodů", parent=setup_group)
+    suggestions_group = app_commands.Group(name="navrhy", description="Nastavení systému návrhů", parent=setup_group)
 
     @setup_group.command(name="nabidka", description="Nastavit kanál pro nové nabídky (HAVE)")
     @app_commands.describe(channel="Textový kanál pro nabídky")
@@ -55,6 +56,31 @@ class Config(commands.Cog):
         await database.set_guild_config(interaction.guild_id, trade_category_id=category.id)
         await interaction.response.send_message(f"✅ Kategorie pro **Obchody** byla nastavena na: {category.name}", ephemeral=True)
 
+    # --- Suggestions Subgroup ---
+
+    @suggestions_group.command(name="nastavit", description="Nastavit systém návrhů")
+    @app_commands.describe(
+        channel="Kanál, kam se budou posílat návrhy",
+        upvote="Emoji pro hlasování 'PRO' (např. 👍)",
+        downvote="Emoji pro hlasování 'PROTI' (např. 👎)"
+    )
+    @commands.has_permissions(administrator=True)
+    async def set_suggestions(self, interaction: discord.Interaction, channel: discord.TextChannel, upvote: str, downvote: str):
+        # Update config
+        await database.set_guild_config(
+            interaction.guild_id,
+            suggestion_channel_id=channel.id,
+            upvote_emoji=upvote,
+            downvote_emoji=downvote
+        )
+
+        await interaction.response.send_message(
+            f"✅ **Systém návrhů nastaven!**\n"
+            f"📢 Kanál: {channel.mention}\n"
+            f"👍 Hlasování: {upvote} / {downvote}",
+            ephemeral=True
+        )
+
     @events_group.command(name="stav", description="Zobrazit aktuální nastavení")
     @commands.has_permissions(administrator=True)
     async def status(self, interaction: discord.Interaction):
@@ -66,6 +92,8 @@ class Config(commands.Cog):
         have_ch = "Nenastaveno"
         want_ch = "Nenastaveno"
         trade_cat = "Nenastaveno"
+        sugg_ch = "Nenastaveno"
+        emojis = "Nenastaveno"
 
         if config:
             if config['event_channel_id']:
@@ -93,6 +121,14 @@ class Config(commands.Cog):
                 if cat: trade_cat = cat.name
                 else: trade_cat = f"Invalid ID ({config['trade_category_id']})"
 
+            if config.get('suggestion_channel_id'):
+                ch = interaction.guild.get_channel(config['suggestion_channel_id'])
+                if ch: sugg_ch = ch.mention
+                else: sugg_ch = f"Invalid ID ({config['suggestion_channel_id']})"
+
+            if config.get('upvote_emoji') and config.get('downvote_emoji'):
+                emojis = f"{config['upvote_emoji']} / {config['downvote_emoji']}"
+
         msg = (
             f"**⚙️ Nastavení Bota:**\n\n"
             f"**📅 Udalosti (Events):**\n"
@@ -101,7 +137,10 @@ class Config(commands.Cog):
             f"**🤝 Obchody:**\n"
             f"📥 Nabídky (HAVE): {have_ch}\n"
             f"📤 Poptávky (WANT): {want_ch}\n"
-            f"📂 Kategorie: {trade_cat}"
+            f"📂 Kategorie: {trade_cat}\n\n"
+            f"**💡 Návrhy:**\n"
+            f"📢 Kanál: {sugg_ch}\n"
+            f"🗳️ Emojis: {emojis}"
         )
         await interaction.response.send_message(msg, ephemeral=True)
 

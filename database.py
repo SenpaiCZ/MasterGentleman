@@ -51,10 +51,19 @@ async def init_db():
                     region TEXT,
                     account_name TEXT DEFAULT 'Main',
                     is_main BOOLEAN DEFAULT 0,
+                    want_more_friends BOOLEAN DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # Check for missing columns in users
+            async with db.execute("PRAGMA table_info(users)") as cursor:
+                columns = [row['name'] for row in await cursor.fetchall()]
+
+            if 'want_more_friends' not in columns:
+                logger.info("Adding missing column want_more_friends to users table.")
+                await db.execute("ALTER TABLE users ADD COLUMN want_more_friends BOOLEAN DEFAULT 0")
 
             # 2. Pokemon Species (New Table)
             # Added columns for MSG stats: hp, attack, defense, sp_atk, sp_def, speed
@@ -118,11 +127,20 @@ async def init_db():
                     message_id INTEGER,
                     channel_id INTEGER,
                     guild_id INTEGER,
+                    count INTEGER DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (account_id) REFERENCES users (id) ON DELETE CASCADE,
                     FOREIGN KEY (species_id) REFERENCES pokemon_species (id) ON DELETE RESTRICT
                 )
             """)
+
+            # Check for missing columns in listings
+            async with db.execute("PRAGMA table_info(listings)") as cursor:
+                columns = [row['name'] for row in await cursor.fetchall()]
+
+            if 'count' not in columns:
+                logger.info("Adding missing column count to listings table.")
+                await db.execute("ALTER TABLE listings ADD COLUMN count INTEGER DEFAULT 1")
 
             # 4. Trades
             await db.execute("""
@@ -163,9 +181,22 @@ async def init_db():
                     event_role_id INTEGER,
                     have_channel_id INTEGER,
                     want_channel_id INTEGER,
-                    trade_category_id INTEGER
+                    trade_category_id INTEGER,
+                    suggestion_channel_id INTEGER,
+                    upvote_emoji TEXT,
+                    downvote_emoji TEXT
                 )
             """)
+
+            # Check for missing columns in guild_config
+            async with db.execute("PRAGMA table_info(guild_config)") as cursor:
+                columns = [row['name'] for row in await cursor.fetchall()]
+
+            if 'suggestion_channel_id' not in columns:
+                logger.info("Adding missing columns for suggestions to guild_config table.")
+                await db.execute("ALTER TABLE guild_config ADD COLUMN suggestion_channel_id INTEGER")
+                await db.execute("ALTER TABLE guild_config ADD COLUMN upvote_emoji TEXT")
+                await db.execute("ALTER TABLE guild_config ADD COLUMN downvote_emoji TEXT")
 
             # 7. Autodelete Config
             await db.execute("""
@@ -193,7 +224,7 @@ async def init_db():
 
 # --- User Accounts ---
 
-async def add_user_account(user_id, friend_code, team, region, account_name="Main", is_main=False):
+async def add_user_account(user_id, friend_code, team, region, account_name="Main", is_main=False, want_more_friends=False):
     async with get_db() as db:
         # Check if first account
         async with db.execute("SELECT COUNT(*) as count FROM users WHERE user_id = ?", (user_id,)) as cursor:
@@ -202,13 +233,13 @@ async def add_user_account(user_id, friend_code, team, region, account_name="Mai
                 is_main = True
 
         await db.execute("""
-            INSERT INTO users (user_id, friend_code, team, region, account_name, is_main, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        """, (user_id, friend_code, team, region, account_name, is_main))
+            INSERT INTO users (user_id, friend_code, team, region, account_name, is_main, want_more_friends, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """, (user_id, friend_code, team, region, account_name, is_main, want_more_friends))
         await db.commit()
 
 async def update_user_account(account_id, **kwargs):
-    allowed_fields = {'account_name', 'friend_code', 'team', 'region', 'is_main'}
+    allowed_fields = {'account_name', 'friend_code', 'team', 'region', 'is_main', 'want_more_friends'}
     updates = []
     params = []
 
@@ -237,6 +268,20 @@ async def get_account(account_id):
     async with get_db() as db:
         async with db.execute("SELECT * FROM users WHERE id = ?", (account_id,)) as cursor:
             return await cursor.fetchone()
+
+async def search_user_accounts(query):
+    async with get_db() as db:
+        # Case insensitive search by account_name
+        sql = "SELECT * FROM users WHERE account_name LIKE ? COLLATE NOCASE"
+        async with db.execute(sql, (f"%{query}%",)) as cursor:
+            return await cursor.fetchall()
+
+async def get_users_wanting_friends(limit=25):
+    async with get_db() as db:
+        sql = "SELECT * FROM users WHERE want_more_friends = 1 LIMIT ?"
+        async with db.execute(sql, (limit,)) as cursor:
+            return await cursor.fetchall()
+
 
 # --- Pokemon Species ---
 
@@ -342,21 +387,22 @@ async def add_listing(user_id, account_id, listing_type, species_id,
                      is_background=False, is_adventure_effect=False,
                      is_mirror=False,
                      details=None,
-                     guild_id=None):
+                     guild_id=None,
+                     count=1):
     async with get_db() as db:
         cursor = await db.execute("""
             INSERT INTO listings (
                 user_id, account_id, listing_type, species_id,
                 is_shiny, is_purified, is_dynamax, is_gigantamax,
                 is_background, is_adventure_effect, is_mirror, details,
-                guild_id
+                guild_id, count
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             user_id, account_id, listing_type, species_id,
             is_shiny, is_purified, is_dynamax, is_gigantamax,
             is_background, is_adventure_effect, is_mirror, details,
-            guild_id
+            guild_id, count
         ))
         await db.commit()
         return cursor.lastrowid
@@ -369,6 +415,11 @@ async def update_listing_message(listing_id, message_id, channel_id):
 async def update_listing_details(listing_id, details):
     async with get_db() as db:
         await db.execute("UPDATE listings SET details = ? WHERE id = ?", (details, listing_id))
+        await db.commit()
+
+async def update_listing_count(listing_id, count):
+    async with get_db() as db:
+        await db.execute("UPDATE listings SET count = ? WHERE id = ?", (count, listing_id))
         await db.commit()
 
 async def get_listing(listing_id):
@@ -555,7 +606,7 @@ async def mark_event_notified(event_id, notification_type):
 # --- Configs ---
 
 async def set_guild_config(guild_id, **kwargs):
-    allowed_fields = {'event_channel_id', 'event_role_id', 'have_channel_id', 'want_channel_id', 'trade_category_id'}
+    allowed_fields = {'event_channel_id', 'event_role_id', 'have_channel_id', 'want_channel_id', 'trade_category_id', 'suggestion_channel_id', 'upvote_emoji', 'downvote_emoji'}
     updates = []
     params = []
 

@@ -24,6 +24,32 @@ class ListingDescriptionModal(ui.Modal, title="Detaily nabídky/poptávky"):
     async def on_submit(self, interaction: discord.Interaction):
         await self.callback(interaction, self.details.value)
 
+class ListingCountModal(ui.Modal, title="Počet (Quantity)"):
+    count = ui.TextInput(
+        label="Počet kusů",
+        placeholder="Zadejte číslo (1-100)",
+        min_length=1,
+        max_length=3,
+        required=True
+    )
+
+    def __init__(self, current_count, callback):
+        super().__init__()
+        self.count.default = str(current_count)
+        self.callback = callback
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not self.count.value.isdigit():
+             await interaction.response.send_message("❌ Zadejte prosím platné číslo.", ephemeral=True)
+             return
+
+        val = int(self.count.value)
+        if val < 1 or val > 100:
+             await interaction.response.send_message("❌ Počet musí být mezi 1 a 100.", ephemeral=True)
+             return
+
+        await self.callback(interaction, val)
+
 
 class ListingDraftView(ui.View):
     def __init__(self, interaction, listing_type, species_id, pokedex_num, pokemon_name, image_url, shiny_image_url, accounts, initial_details=None, submit_callback=None):
@@ -47,6 +73,7 @@ class ListingDraftView(ui.View):
         self.is_adventure_effect = False
         self.is_mirror = False
         self.details = initial_details
+        self.count = 1
 
         # Default to main account or first account
         main_acc = next((acc for acc in accounts if acc['is_main']), accounts[0])
@@ -90,6 +117,17 @@ class ListingDraftView(ui.View):
         )
         btn_details.callback = self.open_details_modal
         self.add_item(btn_details)
+
+        # Count Button
+        btn_count = ui.Button(
+            label=f"Počet: {self.count}",
+            emoji="#️⃣",
+            style=discord.ButtonStyle.secondary,
+            custom_id="edit_count",
+            row=1
+        )
+        btn_count.callback = self.open_count_modal
+        self.add_item(btn_count)
 
         # Row 2: Account Select (if multiple accounts)
         row_offset = 2
@@ -141,7 +179,8 @@ class ListingDraftView(ui.View):
         title = "Návrh Nabídky" if self.listing_type == 'HAVE' else "Návrh Poptávky"
         color = discord.Color.blue() if self.listing_type == 'HAVE' else discord.Color.orange()
 
-        desc = f"**Pokémon:** {self.pokemon_name}\n"
+        count_str = f" (x{self.count})" if self.count > 1 else ""
+        desc = f"**Pokémon:** {self.pokemon_name}{count_str}\n"
 
         # Status line
         status_parts = []
@@ -236,6 +275,13 @@ class ListingDraftView(ui.View):
 
         await interaction.response.send_modal(ListingDescriptionModal(self.details, modal_callback))
 
+    async def open_count_modal(self, interaction: discord.Interaction):
+        async def modal_callback(modal_interaction, new_count):
+            self.count = new_count
+            await self.update_view(modal_interaction)
+
+        await interaction.response.send_modal(ListingCountModal(self.count, modal_callback))
+
     async def select_account(self, interaction: discord.Interaction):
         # The select interaction returns a list of values
         select = [item for item in self.children if isinstance(item, ui.Select)][0]
@@ -272,7 +318,8 @@ class ListingDraftView(ui.View):
                 self.is_background,
                 self.is_adventure_effect,
                 self.is_mirror,
-                self.details
+                self.details,
+                self.count
             )
 
     async def cancel(self, interaction: discord.Interaction):
@@ -298,6 +345,7 @@ class ListingManagementView(ui.View):
             desc_parts = []
             if l['is_shiny']: desc_parts.append("✨")
             if l.get('is_mirror'): desc_parts.append("🪞")
+            if l.get('count', 1) > 1: desc_parts.append(f"(x{l['count']})")
             if l['account_name'] and l['account_name'] != "Main": desc_parts.append(f"👤 {l['account_name']}")
 
             desc = " ".join(desc_parts)

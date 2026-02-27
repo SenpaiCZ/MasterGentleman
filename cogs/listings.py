@@ -65,11 +65,15 @@ class Listings(commands.Cog):
             if l.get('pokemon_form') and l.get('pokemon_form') != 'Normal':
                 p_name += f" ({l['pokemon_form']})"
 
+            # Quantity
+            count = l.get('count', 1)
+            count_str = f" (x{count})" if count > 1 else ""
+
             attrs = self._format_attributes(l)
             details = f"({l['details']})" if l['details'] else ""
 
             # Truncate if too long (Discord limits)
-            line = f"[{acc_name}] | {p_name} {attrs} {details}\n"
+            line = f"[{acc_name}] | {p_name}{count_str} {attrs} {details}\n"
 
             if l_type == 'HAVE':
                 if len(nabidky_text) + len(line) < 1000:
@@ -96,29 +100,20 @@ class Listings(commands.Cog):
         attrs_str = self._format_attributes(listing)
         details_str = f"| {listing['details']}" if listing['details'] else ""
 
+        count = listing.get('count', 1)
+        count_str = f" (x{count})" if count > 1 else ""
+
         type_str = "Nabídka" if listing['listing_type'] == 'HAVE' else "Poptávka"
         acc_name = listing.get('account_name', 'Unknown')
 
         embed = discord.Embed(
             title=f"✅ {type_str} vytvořena!",
-            description=f"{type_str}: {pokemon_name} {attrs_str} {details_str}",
+            description=f"{type_str}: {pokemon_name}{count_str} {attrs_str} {details_str}",
             color=discord.Color.green()
         )
         embed.add_field(name="Účet", value=f"{acc_name}", inline=False)
 
-        # Get Image from DB or constructed object
         img_url = listing.get('image_url')
-        # If shiny, we might need to adjust URL if we were using external logic,
-        # but for now we store generic URL in species.
-        # The previous system used POKEMON_IMAGES dictionary with 'shiny' key.
-        # pokemondb.net images are usually normal.
-        # If we want shiny images, we might need a different source or the old dictionary if we kept it.
-        # But we deleted data/pokemon.py usage.
-        # Let's use the image_url from DB (species).
-
-        # NOTE: pokemondb images are "icon" sprites usually.
-        # If we want shiny, we might need to rely on the old method OR just show normal.
-        # For now, show normal (or whatever is in DB).
         if img_url:
             embed.set_thumbnail(url=img_url)
 
@@ -186,8 +181,11 @@ class Listings(commands.Cog):
             attrs_a = self._format_attributes(listing_a)
             attrs_b = self._format_attributes(listing_b)
 
-            desc_a = f"{name_a} {attrs_a} {listing_a['details'] or ''}"
-            desc_b = f"{name_b} {attrs_b} {listing_b['details'] or ''}"
+            count_a = f"(x{listing_a['count']})" if listing_a.get('count', 1) > 1 else ""
+            count_b = f"(x{listing_b['count']})" if listing_b.get('count', 1) > 1 else ""
+
+            desc_a = f"{name_a}{count_a} {attrs_a} {listing_a['details'] or ''}"
+            desc_b = f"{name_b}{count_b} {attrs_b} {listing_b['details'] or ''}"
 
             acc_a = f"{listing_a['account_name']} (FC: {listing_a['friend_code']})"
             acc_b = f"{listing_b['account_name']} (FC: {listing_b['friend_code']})"
@@ -221,6 +219,7 @@ class Listings(commands.Cog):
                                    dynamax: bool, gigantamax: bool, background: bool, adventure_effect: bool,
                                    is_mirror: bool,
                                    popis: str,
+                                   count: int = 1,
                                    old_listing_id: int = None):
         # NOTE: 'pokemon_id' arg here is now 'species_id' from database
         species_id = pokemon_id
@@ -239,7 +238,8 @@ class Listings(commands.Cog):
                 is_adventure_effect=adventure_effect,
                 is_mirror=is_mirror,
                 details=popis,
-                guild_id=interaction.guild_id if interaction.guild else None
+                guild_id=interaction.guild_id if interaction.guild else None,
+                count=count
             )
 
             type_str = "Nabídka" if listing_type == 'HAVE' else "Poptávka"
@@ -316,7 +316,7 @@ class Listings(commands.Cog):
             else:
                 await interaction.followup.send("❌ Nastala chyba při vytváření záznamu.", ephemeral=True)
 
-    async def _handle_listing_creation(self, interaction: discord.Interaction, listing_type: str, pokemon: str, popis: str):
+    async def _handle_listing_creation(self, interaction: discord.Interaction, listing_type: str, pokemon: str, popis: str, pocet: int = 1):
         # pokemon is now expected to be the Species ID (as string) from autocomplete
         # OR a raw name if user typed something else.
 
@@ -357,9 +357,11 @@ class Listings(commands.Cog):
             submit_callback=self.create_listing_final
         )
 
-        # Load capabilities from DB to disable/enable buttons in View?
-        # ListingDraftView currently defaults all enabled.
-        # Future improvement: pass capabilities to View.
+        # Initial count
+        if pocet < 1: pocet = 1
+        if pocet > 100: pocet = 100
+        view.count = pocet
+        view._update_components()
 
         embed = view._get_embed()
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
@@ -367,22 +369,24 @@ class Listings(commands.Cog):
     @app_commands.command(name="nabidka", description="Nabídni Pokémona k výměně (Offer a Pokemon)")
     @app_commands.describe(
         pokemon="Jméno Pokémona (začněte psát pro našeptávač)",
-        popis="Další detaily (kostým, útoky, atd.) - volitelné"
+        popis="Další detaily (kostým, útoky, atd.) - volitelné",
+        pocet="Počet kusů (1-100) - volitelné"
     )
     @app_commands.autocomplete(pokemon=pokemon_autocomplete)
-    async def nabidka(self, interaction: discord.Interaction, pokemon: str, popis: str = None):
+    async def nabidka(self, interaction: discord.Interaction, pokemon: str, popis: str = None, pocet: int = 1):
         """Vytvoří novou nabídku (HAVE)."""
-        await self._handle_listing_creation(interaction, 'HAVE', pokemon, popis)
+        await self._handle_listing_creation(interaction, 'HAVE', pokemon, popis, pocet)
 
     @app_commands.command(name="poptavka", description="Hledám Pokémona (Request a Pokemon)")
     @app_commands.describe(
         pokemon="Jméno Pokémona (začněte psát pro našeptávač)",
-        popis="Další detaily (kostým, útoky, atd.) - volitelné"
+        popis="Další detaily (kostým, útoky, atd.) - volitelné",
+        pocet="Počet kusů (1-100) - volitelné"
     )
     @app_commands.autocomplete(pokemon=pokemon_autocomplete)
-    async def poptavka(self, interaction: discord.Interaction, pokemon: str, popis: str = None):
+    async def poptavka(self, interaction: discord.Interaction, pokemon: str, popis: str = None, pocet: int = 1):
         """Vytvoří novou poptávku (WANT)."""
-        await self._handle_listing_creation(interaction, 'WANT', pokemon, popis)
+        await self._handle_listing_creation(interaction, 'WANT', pokemon, popis, pocet)
 
     # --- My Listings Management ---
     moje_group = app_commands.Group(name="moje", description="Správa mých záznamů (Manage my listings)")
@@ -506,6 +510,7 @@ class Listings(commands.Cog):
         draft_view.is_background = bool(listing['is_background'])
         draft_view.is_adventure_effect = bool(listing['is_adventure_effect'])
         draft_view.is_mirror = bool(listing['is_mirror'])
+        draft_view.count = int(listing.get('count', 1))
 
         for acc in accounts:
             if acc['id'] == listing['account_id']:
