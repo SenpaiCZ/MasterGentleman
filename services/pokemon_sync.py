@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 import database
 import re
 from urllib.parse import unquote
+import json
 
 logger = logging.getLogger('discord')
 logging.basicConfig(level=logging.INFO)
@@ -87,9 +88,10 @@ async def process_pokemon_family(db, session, pokedex_num):
     stats = parse_stats(soup)
     types = parse_types(soup)
     image_url, shiny_image_url = parse_images(soup)
+    tier_data = parse_tier_ranking(soup)
 
     # Upsert Base Form
-    await upsert_species(db, pokedex_num, base_name, "Normal", types, stats, image_url, shiny_image_url)
+    await upsert_species(db, pokedex_num, base_name, "Normal", types, stats, image_url, shiny_image_url, tier_data)
     print(f"Synced #{pokedex_num} {base_name} (Normal)")
 
     # --- 2. Discover Forms ---
@@ -135,33 +137,106 @@ async def process_single_form(db, session, pokedex_num, url, base_name):
     stats = parse_stats(soup)
     types = parse_types(soup)
     image_url, shiny_image_url = parse_images(soup)
+    tier_data = parse_tier_ranking(soup)
 
     # Upsert
-    await upsert_species(db, pokedex_num, base_name, form_name, types, stats, image_url, shiny_image_url)
+    await upsert_species(db, pokedex_num, base_name, form_name, types, stats, image_url, shiny_image_url, tier_data)
     print(f"  -> Synced #{pokedex_num} {base_name} ({form_name})")
 
 
 def parse_stats(soup):
-    stats = {'attack': 0, 'defense': 0, 'hp': 0, 'max_cp': 0}
-    text = soup.get_text()
+    stats = {'attack': 0, 'defense': 0, 'hp': 0, 'max_cp': 0, 'buddy_distance': 0}
 
-    atk_match = re.search(r'Attack\s+(\d+)', text)
-    if atk_match: stats['attack'] = int(atk_match.group(1))
+    # Locate the stats table or section
+    # Based on HTML: <strong class="PokemonStat_atk__c81C8 ...">...</strong>
+    # But table structure is more reliable:
+    # <tr><th>Attack</th><td><strong>...</strong></td></tr>
 
-    def_match = re.search(r'Defense\s+(\d+)', text)
-    if def_match: stats['defense'] = int(def_match.group(1))
+    # We look for table rows with headers matching stats
+    rows = soup.find_all('tr')
+    for row in rows:
+        header = row.find('th')
+        if not header: continue
 
-    hp_match = re.search(r'Stamina\s+(\d+)', text)
-    if hp_match: stats['hp'] = int(hp_match.group(1))
+        header_text = header.get_text().strip().lower()
+        value_cell = row.find('td')
+        if not value_cell: continue
 
-    # Look for Max CP (Level 50) in text
-    # The page often has "Max CP 1260 CP" or similar in a table
-    # We look for "Max CP" followed by numbers
-    max_cp_match = re.search(r'Max CP\s+(\d+)', text)
-    if max_cp_match:
-        stats['max_cp'] = int(max_cp_match.group(1))
+        value_text = value_cell.get_text().strip()
+
+        # Helper to extract first integer
+        def extract_int(s):
+            match = re.search(r'(\d+)', s)
+            return int(match.group(1)) if match else 0
+
+        if 'attack' in header_text:
+            stats['attack'] = extract_int(value_text)
+        elif 'defense' in header_text:
+            stats['defense'] = extract_int(value_text)
+        elif 'stamina' in header_text:
+            stats['hp'] = extract_int(value_text)
+        elif 'max cp' in header_text:
+            stats['max_cp'] = extract_int(value_text)
+        elif 'buddy distance' in header_text:
+            stats['buddy_distance'] = extract_int(value_text)
 
     return stats
+
+def parse_tier_ranking(soup):
+    """
+    Parses the Tier Ranking section.
+    Returns a list of dicts: [{'category': 'Raid Attacker', 'tier': 'F Tier', 'rank': '#249'}, ...]
+    """
+    rankings = []
+
+    # Container: PokemonTierRanking_grid__CVnr7
+    # Card: PokemonTierRanking_card__bYYSQ
+
+    # Find all ranking cards
+    # Since class names are hashed/dynamic (e.g. CVnr7), we can look for specific structure or partial match if needed.
+    # But usually Next.js hashed classes are stable per build. The user provided HTML has specific classes.
+    # We can also look for sections with headers.
+
+    # Let's try finding by structure: divs that contain "Tier" or "Rank" text?
+    # Or strict class matching from provided HTML: 'PokemonTierRanking_card__bYYSQ'
+
+    cards = soup.find_all('div', class_=re.compile(r'PokemonTierRanking_card__'))
+
+    for card in cards:
+        header = card.find('div', class_=re.compile(r'PokemonTierRanking_cardHeader__'))
+        body = card.find('div', class_=re.compile(r'PokemonTierRanking_cardBody__'))
+
+        if not header or not body: continue
+
+        category = header.get_text().strip()
+
+        # Check for Not Ranked
+        if "Not ranked" in body.get_text():
+            rankings.append({
+                'category': category,
+                'tier': 'Not ranked',
+                'rank': None
+            })
+            continue
+
+        # Extract Tier and Rank
+        # <span class="PokemonTierRanking_tier__Z_VsG" ...>F Tier</span>
+        tier_span = body.find('span', class_=re.compile(r'PokemonTierRanking_tier__'))
+        tier = tier_span.get_text().strip() if tier_span else None
+
+        # <span class="PokemonTierRanking_numericRank__QyD11">#249...</span>
+        rank_span = body.find('span', class_=re.compile(r'PokemonTierRanking_numericRank__'))
+        rank = rank_span.get_text().strip() if rank_span else None
+        # Clean rank text (remove non-digits/hash if needed, or keep as is)
+
+        if tier:
+            rankings.append({
+                'category': category,
+                'tier': tier,
+                'rank': rank
+            })
+
+    return json.dumps(rankings) if rankings else None
 
 def parse_types(soup):
     found_types = []
@@ -241,7 +316,7 @@ def get_text(soup, tag):
     t = soup.find(tag)
     return t.text.strip() if t else None
 
-async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, shiny_image_url):
+async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, shiny_image_url, tier_data):
     type1 = types[0] if len(types) > 0 else None
     type2 = types[1] if len(types) > 1 else None
 
@@ -255,6 +330,7 @@ async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, s
     attack = stats.get('attack', 0)
     defense = stats.get('defense', 0)
     max_cp = stats.get('max_cp', 0)
+    buddy_distance = stats.get('buddy_distance', 0)
 
     sp_atk = 0
     sp_def = 0
@@ -263,7 +339,8 @@ async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, s
     await database.upsert_pokemon_species(
         pokedex_num, name, form, type1, type2, image_url, shiny_image_url,
         can_dynamax, can_gigantamax, can_mega,
-        hp, attack, defense, sp_atk, sp_def, speed, max_cp
+        hp, attack, defense, sp_atk, sp_def, speed, max_cp,
+        buddy_distance, tier_data
     )
 
 if __name__ == "__main__":
