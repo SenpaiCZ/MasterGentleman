@@ -5,6 +5,7 @@ import sys
 import logging
 import asyncio
 import database
+import services.pokemon_sync as pokemon_sync
 
 logger = logging.getLogger('discord')
 
@@ -170,6 +171,58 @@ class Admin(commands.Cog):
         except Exception as e:
             await ctx.send(f"An error occurred: {e}")
             logger.error(f"Backup failed: {e}")
+
+    @commands.command()
+    async def scrape(self, ctx, argument: str = None):
+        """
+        Manually triggers the Pokemon data scrape.
+        Usage:
+        !scrape             - Scrapes ALL Pokemon (1-1025).
+        !scrape <id>        - Scrapes a specific Pokemon by ID.
+        !scrape <name>      - Scrapes a specific Pokemon by Name (looks up ID).
+        """
+        # Check if user is owner
+        is_owner = await self.bot.is_owner(ctx.author)
+        if not is_owner:
+            app_info = await self.bot.application_info()
+            if ctx.author.id != app_info.owner.id:
+                return await ctx.send("You do not have permission to use this command.")
+
+        target_id = None
+        if argument:
+            if argument.isdigit():
+                target_id = int(argument)
+            else:
+                # Try to resolve name
+                species = await database.get_pokemon_species_by_name(argument)
+                if species:
+                    target_id = species['pokedex_num']
+                else:
+                    return await ctx.send(f"❌ Could not find Pokemon with name '{argument}'.")
+
+        msg = await ctx.send("Starting Pokemon data sync...")
+
+        async def progress_callback(current, total):
+            try:
+                if total == 1:
+                     # Single pokemon update
+                     pass
+                else:
+                    # Batch update
+                    if current % 100 == 0 or current == total:
+                         await msg.edit(content=f"Scraping... {current}/{total}")
+            except:
+                pass
+
+        try:
+            await pokemon_sync.scrape_pokemon_data(pokedex_num=target_id, progress_callback=progress_callback)
+            if target_id:
+                await msg.edit(content=f"✅ Scraped data for Pokemon ID {target_id}.")
+            else:
+                await msg.edit(content=f"✅ Finished scraping {pokemon_sync.MAX_POKEMON_ID} Pokemon.")
+        except Exception as e:
+            logger.error(f"Scrape command failed: {e}")
+            await msg.edit(content=f"❌ An error occurred during scraping: {e}")
 
 async def setup(bot):
     await bot.add_cog(Admin(bot))

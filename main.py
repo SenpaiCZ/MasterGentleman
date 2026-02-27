@@ -32,8 +32,9 @@ class TradeBot(commands.Bot):
             async with db.execute("SELECT COUNT(*) as count FROM pokemon_species") as cursor:
                 row = await cursor.fetchone()
                 if row['count'] == 0:
-                    logger.info("Pokemon species table empty. Running initial sync...")
-                    await pokemon_sync.scrape_pokemon_data()
+                    logger.warning("Pokemon species table is empty. Please run !scrape as bot owner.")
+                    # We can't easily DM the owner here because the bot isn't fully ready/connected to gateway yet.
+                    # We will do it in on_ready.
                 else:
                     logger.info(f"Pokemon species table has {row['count']} entries.")
 
@@ -57,6 +58,19 @@ class TradeBot(commands.Bot):
     async def on_ready(self):
         logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
         logger.info('------')
+
+        # Check if DB is empty and notify owner
+        async with database.get_db() as db:
+            async with db.execute("SELECT COUNT(*) as count FROM pokemon_species") as cursor:
+                row = await cursor.fetchone()
+                if row['count'] == 0:
+                    try:
+                        app_info = await self.application_info()
+                        if app_info.owner:
+                            await app_info.owner.send("⚠️ **Database Alert**: The Pokémon species table is empty. Please run `!scrape` to populate it.")
+                            logger.info("Sent empty DB notification to owner.")
+                    except Exception as e:
+                        logger.error(f"Failed to send owner notification: {e}")
 
 bot = TradeBot()
 

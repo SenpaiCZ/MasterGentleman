@@ -12,10 +12,14 @@ logging.basicConfig(level=logging.INFO)
 BASE_URL = "https://db.pokemongohub.net"
 MAX_POKEMON_ID = 1025
 
-async def scrape_pokemon_data():
+async def scrape_pokemon_data(pokedex_num=None, progress_callback=None):
     """
-    Scrapes Pokemon data from db.pokemongohub.net by iterating IDs.
+    Scrapes Pokemon data from db.pokemongohub.net by iterating IDs or scraping a specific ID.
     Populates the pokemon_species table.
+
+    Args:
+        pokedex_num (int, optional): The specific Pokedex number to scrape. If None, scrapes all.
+        progress_callback (callable, optional): A coroutine to call with progress updates (current, total).
     """
     logger.info("Starting Pokemon GO data sync from db.pokemongohub.net...")
     print("Starting Pokemon GO data sync...")
@@ -26,14 +30,30 @@ async def scrape_pokemon_data():
 
     async with database.get_db() as db:
         async with aiohttp.ClientSession(headers=headers) as session:
-            for pokedex_num in range(1, MAX_POKEMON_ID + 1):
+            if pokedex_num:
+                # Scrape single Pokemon
                 try:
                     await process_pokemon_family(db, session, pokedex_num)
+                    if progress_callback:
+                        await progress_callback(1, 1)
                 except Exception as e:
                     logger.error(f"Error processing #{pokedex_num}: {e}")
+            else:
+                # Scrape all Pokemon
+                total = MAX_POKEMON_ID
+                for current_id in range(1, total + 1):
+                    try:
+                        await process_pokemon_family(db, session, current_id)
+                        if progress_callback and current_id % 10 == 0:
+                            await progress_callback(current_id, total)
+                    except Exception as e:
+                        logger.error(f"Error processing #{current_id}: {e}")
 
-                # Polite delay
-                await asyncio.sleep(1.0)
+                    # Polite delay
+                    await asyncio.sleep(1.0)
+
+                if progress_callback:
+                    await progress_callback(total, total)
 
     print("Pokemon data sync complete.")
 
