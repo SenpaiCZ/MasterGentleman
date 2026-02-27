@@ -76,6 +76,45 @@ class ListingDraftView(ui.View):
         self.details = initial_details
         self.count = 1
 
+        # Adventure Effect Eligibility
+        # Allowed: Origin Dialga, Origin Palkia, Black Kyurem, White Kyurem,
+        # Dusk Mane Necrozma, Dawn Wings Necrozma, Crowned Shield Zamazenta,
+        # Crowned Sword Zacian, Eternatus
+
+        # We need to check exact form matches.
+        # pokemon_name passed here usually contains form if not Normal (e.g. "Dialga (Origin Forme)")
+        # Ideally we should check based on pokedex_num and form or exact name.
+        # But here we assume pokemon_name is constructed as "Name (Form)" if form != Normal.
+
+        # Let's normalize for check.
+        # The list provided:
+        # Origin Dialga -> Dialga (Origin Forme)
+        # Origin Palkia -> Palkia (Origin Forme)
+        # Black Kyurem -> Kyurem (Black Kyurem) ? Need to verify exact form strings from DB.
+        # But roughly we can check partials if unique enough.
+
+        name_check = pokemon_name.lower()
+
+        self.can_adventure_effect = False
+
+        # List of allowed identifiers (checking against lower case name+form)
+        allowed_adv = [
+            "dialga (origin",
+            "palkia (origin",
+            "kyurem (black",
+            "kyurem (white",
+            "necrozma (dusk mane",
+            "necrozma (dawn wings",
+            "zamazenta (crowned shield",
+            "zacian (crowned sword",
+            "eternatus"
+        ]
+
+        for allowed in allowed_adv:
+            if allowed in name_check:
+                self.can_adventure_effect = True
+                break
+
         # Default to main account or first account
         main_acc = next((acc for acc in accounts if acc['is_main']), accounts[0])
         self.selected_account_id = main_acc['id']
@@ -107,7 +146,9 @@ class ListingDraftView(ui.View):
         self.add_item(self._create_button("BG", "🌍", self.is_background, "toggle_bg", self.toggle_bg, 0))
 
         # Row 1: Advanced Attributes & Details
-        self.add_item(self._create_button("Adv", "🪄", self.is_adventure_effect, "toggle_adv", self.toggle_adv, 1))
+        if self.can_adventure_effect:
+            self.add_item(self._create_button("Adventure Effect", "🪄", self.is_adventure_effect, "toggle_adv", self.toggle_adv, 1))
+
         self.add_item(self._create_button("Mirror", "🪞", self.is_mirror, "toggle_mirror", self.toggle_mirror, 1))
 
         btn_details = ui.Button(
@@ -191,7 +232,7 @@ class ListingDraftView(ui.View):
         if self.is_dynamax: status_parts.append("**Dyna**")
         # Removed Giga status
         if self.is_background: status_parts.append("🌍 **BG**")
-        if self.is_adventure_effect: status_parts.append("🪄 **Adv**")
+        if self.is_adventure_effect: status_parts.append("🪄 **Adventure Effect**")
         if self.is_mirror: status_parts.append("🪞 **Mirror**")
 
         if status_parts:

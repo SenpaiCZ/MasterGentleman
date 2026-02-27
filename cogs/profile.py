@@ -93,7 +93,7 @@ class Profile(commands.Cog):
             await interaction.response.send_message(
                 embed=embed,
                 view=ProfileView(accounts),
-                ephemeral=False
+                ephemeral=True
             )
 
         except Exception as e:
@@ -112,7 +112,7 @@ class Profile(commands.Cog):
 
     async def generate_qr_context(self, interaction: discord.Interaction, member: discord.Member):
         """Generuje QR kódy pro friend codes uživatele."""
-        await interaction.response.defer(ephemeral=False)
+        await interaction.response.defer(ephemeral=True)
 
         try:
             accounts = await database.get_user_accounts(member.id)
