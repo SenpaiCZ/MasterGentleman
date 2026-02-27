@@ -5,8 +5,9 @@ import math
 import logging
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
-from data.pokemon import POKEMON_IMAGES, POKEMON_IDS
+# from data.pokemon import POKEMON_IMAGES, POKEMON_IDS # REMOVED: Using DB data
 import qrcode
+import database # To fetch URLs if needed or rely on passed data
 
 logger = logging.getLogger('discord')
 
@@ -41,38 +42,36 @@ class ImageGenerator:
         needed = set()
 
         for item in listings:
-            pid = item['pokemon_id']
+            # We use pokemon_id (pokedex_num) + form + shiny for cache key
+            pid = item.get('pokemon_id')
+            pform = item.get('pokemon_form', 'Normal')
             is_shiny = item['is_shiny']
-            key = (pid, is_shiny)
-            if key in needed:
-                continue
-            needed.add(key)
 
-            img_info = POKEMON_IMAGES.get(pid)
-            if not img_info:
-                continue
-
-            url = img_info.get('shiny') if is_shiny else img_info.get('normal')
-            if not url:
-                url = img_info.get('normal')
-
-            if not url:
-                continue
-
-            filename = f"{pid}_{'shiny' if is_shiny else 'normal'}.png"
+            # Construct filename: {id}_{form}_{shiny}.png
+            # Sanitize form name
+            safe_form = pform.replace(" ", "_").lower()
+            filename = f"{pid}_{safe_form}_{'shiny' if is_shiny else 'normal'}.png"
             filepath = os.path.join(self.sprite_dir, filename)
 
+            if (pid, pform, is_shiny) in needed:
+                continue
+            needed.add((pid, pform, is_shiny))
+
             if not os.path.exists(filepath):
-                tasks.append((url, filepath))
+                # Get URL from item (it comes from DB join)
+                url = item.get('image_url')
+                if url:
+                    tasks.append((url, filepath))
 
         if tasks:
             async with aiohttp.ClientSession() as session:
                 download_tasks = [self._download_image(session, url, path) for url, path in tasks]
                 await asyncio.gather(*download_tasks)
 
-    def _get_sprite_sync(self, pokemon_id, is_shiny):
+    def _get_sprite_sync(self, pokemon_id, pokemon_form, is_shiny):
         """Sync function to load image from disk."""
-        filename = f"{pokemon_id}_{'shiny' if is_shiny else 'normal'}.png"
+        safe_form = pokemon_form.replace(" ", "_").lower()
+        filename = f"{pokemon_id}_{safe_form}_{'shiny' if is_shiny else 'normal'}.png"
         filepath = os.path.join(self.sprite_dir, filename)
 
         if os.path.exists(filepath):
@@ -150,8 +149,8 @@ class ImageGenerator:
         # --- Fonts ---
         try:
             # Reduced font sizes as requested
-            font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 12) # Half size (prev 24)
-            font_user = ImageFont.truetype("DejaVuSans-Bold.ttf", 14)  # Smaller (prev 20)
+            font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 12)
+            font_user = ImageFont.truetype("DejaVuSans-Bold.ttf", 14)
             font_text = ImageFont.truetype("DejaVuSans.ttf", 14)
             font_small = ImageFont.truetype("DejaVuSans.ttf", 10)
             font_badge = ImageFont.truetype("DejaVuSans-Bold.ttf", 10)
@@ -169,7 +168,6 @@ class ImageGenerator:
         draw.rectangle([(0, 0), (IMG_W, HEADER_H)], fill=team_color_rgb)
 
         # User Name inside Header (Right Aligned)
-        # Using anchor 'rm' (Right Middle)
         draw.text((IMG_W - MARGIN, HEADER_H / 2), user_name, font=font_user, fill=(255, 255, 255), anchor="rm")
 
         # --- QR Code & Title Section ---
@@ -201,7 +199,8 @@ class ImageGenerator:
 
             draw.rectangle([(x + 2, y + 2), (x + CELL_W - 2, y + CELL_H - 2)], fill=(47, 49, 54), outline=None)
 
-            pokemon_id = item['pokemon_id']
+            pokemon_id = item.get('pokemon_id') # This is pokedex_num from JOIN
+            pokemon_form = item.get('pokemon_form', 'Normal')
             is_shiny = item['is_shiny']
             is_purified = item['is_purified']
             is_dynamax = item.get('is_dynamax', False)
@@ -209,7 +208,7 @@ class ImageGenerator:
             is_background = item.get('is_background', False)
             is_adventure_effect = item.get('is_adventure_effect', False)
 
-            sprite = self._get_sprite_sync(pokemon_id, is_shiny)
+            sprite = self._get_sprite_sync(pokemon_id, pokemon_form, is_shiny)
             if sprite:
                 sw, sh = sprite.size
                 scale = min(90/sw, 90/sh, 1.0)
@@ -220,7 +219,14 @@ class ImageGenerator:
                 py = y + 10 + (90 - new_size[1]) // 2
                 img.alpha_composite(sprite, (px, py))
 
-            p_name = POKEMON_IDS.get(pokemon_id, "Unknown")
+            # Name from DB
+            p_name = item.get('pokemon_name', "Unknown")
+            if pokemon_form != 'Normal':
+                 # Maybe shorten form?
+                 # p_name += f" ({pokemon_form})"
+                 # If name is too long, maybe just name?
+                 pass
+
             if len(p_name) > 12:
                 p_name = p_name[:10] + "..."
 

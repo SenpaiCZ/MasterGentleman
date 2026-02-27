@@ -1,14 +1,55 @@
 import aiosqlite
 import os
 import logging
+import asyncio
 
 logger = logging.getLogger('discord')
 
 DB_NAME = "trade_bot.db"
 
+def dict_factory(cursor, row):
+    """
+    Factory to return dictionary instead of sqlite3.Row or tuple.
+    """
+    d = {}
+    for idx, col in enumerate(cursor.description):
+        d[col[0]] = row[idx]
+    return d
+
+def get_db():
+    """Returns an aiosqlite connection context manager."""
+    # We return the connect() context manager directly.
+    # The caller uses: async with get_db() as db:
+    # Inside the block, we can't easily enforce PRAGMA unless we wrap it.
+    # So let's wrap it in an async context manager.
+    return DBContext()
+
+class DBContext:
+    def __init__(self):
+        self.db = None
+
+    async def __aenter__(self):
+        self.db = await aiosqlite.connect(DB_NAME)
+        self.db.row_factory = dict_factory
+        await self.db.execute("PRAGMA foreign_keys = ON")
+        return self.db
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if self.db:
+            await self.db.close()
+
 async def init_db():
     try:
-        async with aiosqlite.connect(DB_NAME) as db:
+        async with get_db() as db:
+            # We explicitly DROP listings/pokemon_species if they exist to force schema update as requested
+            # CAUTION: This wipes data. User approved "Reset Database".
+
+            # Since we are re-defining schema, let's just drop everything to be safe and clean.
+            tables = ['trades', 'listings', 'pokemon_species', 'users', 'events', 'guild_config', 'autodelete_config', 'user_departures']
+            for table in tables:
+                await db.execute(f"DROP TABLE IF EXISTS {table}")
+
+            # 1. Users
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,28 +63,54 @@ async def init_db():
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # 2. Pokemon Species (New Table)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS pokemon_species (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pokedex_num INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    form TEXT DEFAULT 'Normal',
+                    type1 TEXT,
+                    type2 TEXT,
+                    image_url TEXT,
+                    can_dynamax BOOLEAN DEFAULT 0,
+                    can_gigantamax BOOLEAN DEFAULT 0,
+                    can_mega BOOLEAN DEFAULT 0,
+                    is_legendary BOOLEAN DEFAULT 0,
+                    is_mythical BOOLEAN DEFAULT 0,
+                    UNIQUE(pokedex_num, form)
+                )
+            """)
+
+            # 3. Listings
+            # Changed pokemon_id (int) to species_id (FK)
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS listings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
                     account_id INTEGER NOT NULL,
                     listing_type TEXT NOT NULL CHECK(listing_type IN ('HAVE', 'WANT')),
-                    pokemon_id INTEGER NOT NULL,
+                    species_id INTEGER NOT NULL,
                     is_shiny BOOLEAN DEFAULT 0,
                     is_purified BOOLEAN DEFAULT 0,
                     is_dynamax BOOLEAN DEFAULT 0,
                     is_gigantamax BOOLEAN DEFAULT 0,
                     is_background BOOLEAN DEFAULT 0,
                     is_adventure_effect BOOLEAN DEFAULT 0,
+                    is_mirror BOOLEAN DEFAULT 0,
                     details TEXT,
                     status TEXT DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE', 'PENDING', 'COMPLETED', 'CANCELLED')),
                     message_id INTEGER,
                     channel_id INTEGER,
                     guild_id INTEGER,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (account_id) REFERENCES users (id)
+                    FOREIGN KEY (account_id) REFERENCES users (id) ON DELETE CASCADE,
+                    FOREIGN KEY (species_id) REFERENCES pokemon_species (id) ON DELETE RESTRICT
                 )
             """)
+
+            # 4. Trades
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS trades (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,10 +119,12 @@ async def init_db():
                     listing_b_id INTEGER NOT NULL,
                     status TEXT DEFAULT 'OPEN' CHECK(status IN ('OPEN', 'CLOSED')),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (listing_a_id) REFERENCES listings (id),
-                    FOREIGN KEY (listing_b_id) REFERENCES listings (id)
+                    FOREIGN KEY (listing_a_id) REFERENCES listings (id) ON DELETE CASCADE,
+                    FOREIGN KEY (listing_b_id) REFERENCES listings (id) ON DELETE CASCADE
                 )
             """)
+
+            # 5. Events
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,9 +139,9 @@ async def init_db():
                     UNIQUE(link)
                 )
             """)
-            await db.execute("""
-                CREATE INDEX IF NOT EXISTS idx_start_time ON events (start_time)
-            """)
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_start_time ON events (start_time)")
+
+            # 6. Guild Config
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS guild_config (
                     guild_id INTEGER PRIMARY KEY,
@@ -83,6 +152,8 @@ async def init_db():
                     trade_category_id INTEGER
                 )
             """)
+
+            # 7. Autodelete Config
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS autodelete_config (
                     channel_id INTEGER PRIMARY KEY,
@@ -90,6 +161,8 @@ async def init_db():
                     duration_minutes INTEGER
                 )
             """)
+
+            # 8. User Departures
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS user_departures (
                     user_id INTEGER PRIMARY KEY,
@@ -98,59 +171,21 @@ async def init_db():
                 )
             """)
 
-            # Migration: Check if event_config exists
-            async with db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='event_config'") as cursor:
-                if await cursor.fetchone():
-                    logger.info("Migrating event_config to guild_config...")
-                    await db.execute("""
-                        INSERT OR IGNORE INTO guild_config (guild_id, event_channel_id, event_role_id)
-                        SELECT guild_id, channel_id, role_id FROM event_config
-                    """)
-                    await db.execute("DROP TABLE event_config")
-                    logger.info("Migration complete.")
-
-            # Migration: Add new columns to listings if they don't exist
-            async with db.execute("PRAGMA table_info(listings)") as cursor:
-                columns = [row[1] for row in await cursor.fetchall()]
-
-                new_cols = [
-                    ("is_dynamax", "BOOLEAN DEFAULT 0"),
-                    ("is_gigantamax", "BOOLEAN DEFAULT 0"),
-                    ("is_background", "BOOLEAN DEFAULT 0"),
-                    ("is_adventure_effect", "BOOLEAN DEFAULT 0"),
-                    ("is_mirror", "BOOLEAN DEFAULT 0"),
-                    ("message_id", "INTEGER"),
-                    ("channel_id", "INTEGER"),
-                    ("guild_id", "INTEGER")
-                ]
-
-                for col_name, col_def in new_cols:
-                    if col_name not in columns:
-                        logger.info(f"Adding column {col_name} to listings table...")
-                        await db.execute(f"ALTER TABLE listings ADD COLUMN {col_name} {col_def}")
-
-            # Migration: Add trade_category_id to guild_config
-            async with db.execute("PRAGMA table_info(guild_config)") as cursor:
-                columns = [row[1] for row in await cursor.fetchall()]
-                if "trade_category_id" not in columns:
-                    logger.info("Adding column trade_category_id to guild_config table...")
-                    await db.execute("ALTER TABLE guild_config ADD COLUMN trade_category_id INTEGER")
-
             await db.commit()
-            logger.info("Database initialized successfully.")
+            logger.info("Database initialized successfully with new schema.")
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
         raise
 
+# --- User Accounts ---
+
 async def add_user_account(user_id, friend_code, team, region, account_name="Main", is_main=False):
-    """Adds a new account for a user."""
-    async with aiosqlite.connect(DB_NAME) as db:
-        # Check if this is the first account for the user, if so, force is_main=True
-        async with db.execute("SELECT COUNT(*) FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            count = (await cursor.fetchone())[0]
-            if count == 0:
+    async with get_db() as db:
+        # Check if first account
+        async with db.execute("SELECT COUNT(*) as count FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row['count'] == 0:
                 is_main = True
-                # account_name = "Main" # User should specify name now
 
         await db.execute("""
             INSERT INTO users (user_id, friend_code, team, region, account_name, is_main, updated_at)
@@ -159,7 +194,6 @@ async def add_user_account(user_id, friend_code, team, region, account_name="Mai
         await db.commit()
 
 async def update_user_account(account_id, **kwargs):
-    """Updates specific fields of a user account."""
     allowed_fields = {'account_name', 'friend_code', 'team', 'region', 'is_main'}
     updates = []
     params = []
@@ -175,43 +209,98 @@ async def update_user_account(account_id, **kwargs):
     params.append(account_id)
     query = f"UPDATE users SET {', '.join(updates)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
 
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with get_db() as db:
         await db.execute(query, tuple(params))
         await db.commit()
     return True
 
 async def get_user_accounts(user_id):
-    """Returns all accounts associated with a Discord user ID."""
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         async with db.execute("SELECT * FROM users WHERE user_id = ? ORDER BY is_main DESC, id ASC", (user_id,)) as cursor:
             return await cursor.fetchall()
 
 async def get_account(account_id):
-    """Returns a specific account by its ID."""
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         async with db.execute("SELECT * FROM users WHERE id = ?", (account_id,)) as cursor:
             return await cursor.fetchone()
 
-async def add_listing(user_id, account_id, listing_type, pokemon_id,
+# --- Pokemon Species ---
+
+async def upsert_pokemon_species(pokedex_num, name, form, type1, type2=None, image_url=None,
+                                 can_dynamax=False, can_gigantamax=False, can_mega=False):
+    """Inserts or updates a pokemon species."""
+    async with get_db() as db:
+        # Check if exists
+        async with db.execute("SELECT id FROM pokemon_species WHERE pokedex_num = ? AND form = ?", (pokedex_num, form)) as cursor:
+            row = await cursor.fetchone()
+
+        if row:
+            # Update
+            await db.execute("""
+                UPDATE pokemon_species
+                SET name=?, type1=?, type2=?, image_url=?, can_dynamax=?, can_gigantamax=?, can_mega=?
+                WHERE id=?
+            """, (name, type1, type2, image_url, can_dynamax, can_gigantamax, can_mega, row['id']))
+            await db.commit()
+            return row['id']
+        else:
+            # Insert
+            cursor = await db.execute("""
+                INSERT INTO pokemon_species (pokedex_num, name, form, type1, type2, image_url, can_dynamax, can_gigantamax, can_mega)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (pokedex_num, name, form, type1, type2, image_url, can_dynamax, can_gigantamax, can_mega))
+            await db.commit()
+            return cursor.lastrowid
+
+async def get_pokemon_species_by_name(name):
+    """
+    Finds a species by name.
+    Note: 'name' here might be just the species name (e.g. 'Bulbasaur') or name+form.
+    For autocomplete purposes, we might need a LIKE query.
+    """
+    async with get_db() as db:
+        # Exact match first
+        async with db.execute("SELECT * FROM pokemon_species WHERE name = ? COLLATE NOCASE", (name,)) as cursor:
+            row = await cursor.fetchone()
+            if row: return row
+
+        # Try finding by name where form is 'Normal'
+        async with db.execute("SELECT * FROM pokemon_species WHERE name = ? COLLATE NOCASE AND form = 'Normal'", (name,)) as cursor:
+            return await cursor.fetchone()
+
+async def search_pokemon_species(query, limit=25):
+    """Search for autocomplete."""
+    async with get_db() as db:
+        # Search by name or form
+        sql = """
+            SELECT * FROM pokemon_species
+            WHERE name LIKE ? OR (name || ' ' || form) LIKE ?
+            LIMIT ?
+        """
+        like_query = f"{query}%"
+        async with db.execute(sql, (like_query, like_query, limit)) as cursor:
+            return await cursor.fetchall()
+
+# --- Listings ---
+
+async def add_listing(user_id, account_id, listing_type, species_id,
                      is_shiny=False, is_purified=False,
                      is_dynamax=False, is_gigantamax=False,
                      is_background=False, is_adventure_effect=False,
                      is_mirror=False,
                      details=None,
                      guild_id=None):
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with get_db() as db:
         cursor = await db.execute("""
             INSERT INTO listings (
-                user_id, account_id, listing_type, pokemon_id,
+                user_id, account_id, listing_type, species_id,
                 is_shiny, is_purified, is_dynamax, is_gigantamax,
                 is_background, is_adventure_effect, is_mirror, details,
                 guild_id
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            user_id, account_id, listing_type, pokemon_id,
+            user_id, account_id, listing_type, species_id,
             is_shiny, is_purified, is_dynamax, is_gigantamax,
             is_background, is_adventure_effect, is_mirror, details,
             guild_id
@@ -220,35 +309,38 @@ async def add_listing(user_id, account_id, listing_type, pokemon_id,
         return cursor.lastrowid
 
 async def update_listing_message(listing_id, message_id, channel_id):
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with get_db() as db:
         await db.execute("UPDATE listings SET message_id = ?, channel_id = ? WHERE id = ?", (message_id, channel_id, listing_id))
         await db.commit()
 
 async def update_listing_details(listing_id, details):
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with get_db() as db:
         await db.execute("UPDATE listings SET details = ? WHERE id = ?", (details, listing_id))
         await db.commit()
 
 async def get_listing(listing_id):
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
-        # We might want to join users to get account details
+    async with get_db() as db:
+        # Join users and pokemon_species
         sql = """
-            SELECT l.*, u.friend_code, u.account_name, u.team, u.region
+            SELECT l.*,
+                   u.friend_code, u.account_name, u.team, u.region,
+                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url
             FROM listings l
             JOIN users u ON l.account_id = u.id
+            JOIN pokemon_species p ON l.species_id = p.id
             WHERE l.id = ?
         """
         async with db.execute(sql, (listing_id,)) as cursor:
             return await cursor.fetchone()
 
 async def get_user_listings(user_id, status='ACTIVE'):
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         sql = """
-            SELECT l.*, u.account_name
+            SELECT l.*, u.account_name,
+                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url
             FROM listings l
             JOIN users u ON l.account_id = u.id
+            JOIN pokemon_species p ON l.species_id = p.id
             WHERE l.user_id = ? AND l.status = ?
             ORDER BY l.created_at DESC, l.id DESC
         """
@@ -256,12 +348,13 @@ async def get_user_listings(user_id, status='ACTIVE'):
             return await cursor.fetchall()
 
 async def get_account_listings(account_id, status='ACTIVE'):
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         sql = """
-            SELECT l.*, u.account_name
+            SELECT l.*, u.account_name,
+                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url
             FROM listings l
             JOIN users u ON l.account_id = u.id
+            JOIN pokemon_species p ON l.species_id = p.id
             WHERE l.account_id = ? AND l.status = ?
             ORDER BY l.created_at DESC, l.id DESC
         """
@@ -269,17 +362,19 @@ async def get_account_listings(account_id, status='ACTIVE'):
             return await cursor.fetchall()
 
 async def update_listing_status(listing_id, status):
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with get_db() as db:
         await db.execute("UPDATE listings SET status = ? WHERE id = ?", (status, listing_id))
         await db.commit()
 
 async def delete_listing(listing_id):
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with get_db() as db:
         await db.execute("DELETE FROM listings WHERE id = ?", (listing_id,))
         await db.commit()
 
+# --- Trades ---
+
 async def create_trade(listing_a_id, listing_b_id, channel_id):
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with get_db() as db:
         cursor = await db.execute("""
             INSERT INTO trades (listing_a_id, listing_b_id, channel_id)
             VALUES (?, ?, ?)
@@ -288,49 +383,55 @@ async def create_trade(listing_a_id, listing_b_id, channel_id):
         return cursor.lastrowid
 
 async def get_trade_by_channel(channel_id):
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         async with db.execute("SELECT * FROM trades WHERE channel_id = ?", (channel_id,)) as cursor:
             return await cursor.fetchone()
 
 async def close_trade(trade_id):
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with get_db() as db:
         await db.execute("UPDATE trades SET status = 'CLOSED' WHERE id = ?", (trade_id,))
         await db.commit()
 
 async def update_trade_channel(trade_id, channel_id):
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with get_db() as db:
         await db.execute("UPDATE trades SET channel_id = ? WHERE id = ?", (channel_id, trade_id))
         await db.commit()
 
 async def get_expired_trades(days=7):
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         sql = "SELECT * FROM trades WHERE status = 'OPEN' AND created_at < datetime('now', '-' || ? || ' days')"
         async with db.execute(sql, (days,)) as cursor:
             return await cursor.fetchall()
 
-async def find_candidates(listing_type, pokemon_id,
+async def check_trade_history(listing_a_id, listing_b_id):
+    async with get_db() as db:
+        sql = """
+            SELECT * FROM trades
+            WHERE (listing_a_id = ? AND listing_b_id = ?)
+            OR (listing_a_id = ? AND listing_b_id = ?)
+        """
+        async with db.execute(sql, (listing_a_id, listing_b_id, listing_b_id, listing_a_id)) as cursor:
+            return await cursor.fetchone()
+
+async def find_candidates(listing_type, species_id,
                           is_shiny, is_purified,
                           is_dynamax, is_gigantamax,
                           is_background, is_adventure_effect,
                           is_mirror,
                           exclude_user_id):
     """
-    Finds all ACTIVE listings that match the criteria, sorted by oldest first.
-    listing_type: The type we are LOOKING for (e.g. if we have HAVE, we look for WANT).
-    exclude_user_id: The Discord User ID to exclude (so we don't match our own alts).
-    is_mirror: If True, we look for listings that ALSO have is_mirror=True.
-               If False, we look for listings that have is_mirror=False (to protect mirror users).
+    Finds all ACTIVE listings that match the criteria.
+    Now uses species_id.
     """
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         sql = """
-            SELECT l.*, u.friend_code, u.account_name
+            SELECT l.*, u.friend_code, u.account_name,
+                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id
             FROM listings l
             JOIN users u ON l.account_id = u.id
+            JOIN pokemon_species p ON l.species_id = p.id
             WHERE l.listing_type = ?
-            AND l.pokemon_id = ?
+            AND l.species_id = ?
             AND l.is_shiny = ?
             AND l.is_purified = ?
             AND l.is_dynamax = ?
@@ -343,7 +444,7 @@ async def find_candidates(listing_type, pokemon_id,
             ORDER BY l.created_at ASC
         """
         async with db.execute(sql, (
-            listing_type, pokemon_id,
+            listing_type, species_id,
             is_shiny, is_purified,
             is_dynamax, is_gigantamax,
             is_background, is_adventure_effect,
@@ -352,32 +453,20 @@ async def find_candidates(listing_type, pokemon_id,
         )) as cursor:
             return await cursor.fetchall()
 
-async def check_trade_history(listing_a_id, listing_b_id):
-    """Checks if these two listings have already been paired."""
-    async with aiosqlite.connect(DB_NAME) as db:
-        sql = """
-            SELECT * FROM trades
-            WHERE (listing_a_id = ? AND listing_b_id = ?)
-            OR (listing_a_id = ? AND listing_b_id = ?)
-        """
-        async with db.execute(sql, (listing_a_id, listing_b_id, listing_b_id, listing_a_id)) as cursor:
-            return await cursor.fetchone()
+# --- Events ---
 
 async def upsert_event(name, link, image_url, start_time, end_time):
-    async with aiosqlite.connect(DB_NAME) as db:
-        # Check if exists
+    async with get_db() as db:
         async with db.execute("SELECT id FROM events WHERE link = ?", (link,)) as cursor:
             row = await cursor.fetchone()
             if row:
-                # Update info if needed, but don't reset notified flags unless intended
-                # We update start_time and end_time in case they changed
                 await db.execute("""
                     UPDATE events
                     SET name = ?, image_url = ?, start_time = ?, end_time = ?
                     WHERE id = ?
-                """, (name, image_url, start_time, end_time, row[0]))
+                """, (name, image_url, start_time, end_time, row['id']))
                 await db.commit()
-                return row[0]
+                return row['id']
             else:
                 cursor = await db.execute("""
                     INSERT INTO events (name, link, image_url, start_time, end_time)
@@ -387,8 +476,7 @@ async def upsert_event(name, link, image_url, start_time, end_time):
                 return cursor.lastrowid
 
 async def get_upcoming_events(from_time, to_time=None):
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         sql = "SELECT * FROM events WHERE start_time >= ?"
         params = [from_time]
         if to_time:
@@ -399,23 +487,19 @@ async def get_upcoming_events(from_time, to_time=None):
             return await cursor.fetchall()
 
 async def get_events_for_notification(threshold_start, threshold_end, notification_type):
-    """
-    Get events starting between threshold_start and threshold_end
-    that haven't been notified yet for the given type.
-    notification_type: '2h' or '5m'
-    """
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         col_name = f"notified_{notification_type}"
         sql = f"SELECT * FROM events WHERE start_time BETWEEN ? AND ? AND {col_name} = 0"
         async with db.execute(sql, (threshold_start, threshold_end)) as cursor:
             return await cursor.fetchall()
 
 async def mark_event_notified(event_id, notification_type):
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with get_db() as db:
         col_name = f"notified_{notification_type}"
         await db.execute(f"UPDATE events SET {col_name} = 1 WHERE id = ?", (event_id,))
         await db.commit()
+
+# --- Configs ---
 
 async def set_guild_config(guild_id, **kwargs):
     allowed_fields = {'event_channel_id', 'event_role_id', 'have_channel_id', 'want_channel_id', 'trade_category_id'}
@@ -430,8 +514,7 @@ async def set_guild_config(guild_id, **kwargs):
     if not updates:
         return
 
-    async with aiosqlite.connect(DB_NAME) as db:
-        # Upsert logic
+    async with get_db() as db:
         async with db.execute("SELECT 1 FROM guild_config WHERE guild_id = ?", (guild_id,)) as cursor:
             exists = await cursor.fetchone()
 
@@ -440,8 +523,6 @@ async def set_guild_config(guild_id, **kwargs):
             sql = f"UPDATE guild_config SET {', '.join(updates)} WHERE guild_id = ?"
             await db.execute(sql, tuple(params))
         else:
-            # For insert, we need to handle specific columns
-            # This is a bit tricky with dynamic kwargs, so we can do INSERT OR IGNORE then UPDATE
             await db.execute("INSERT OR IGNORE INTO guild_config (guild_id) VALUES (?)", (guild_id,))
             params.append(guild_id)
             sql = f"UPDATE guild_config SET {', '.join(updates)} WHERE guild_id = ?"
@@ -450,14 +531,12 @@ async def set_guild_config(guild_id, **kwargs):
         await db.commit()
 
 async def get_guild_config(guild_id):
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         async with db.execute("SELECT * FROM guild_config WHERE guild_id = ?", (guild_id,)) as cursor:
             return await cursor.fetchone()
 
-# Autodelete Config
 async def set_autodelete_config(channel_id, guild_id, duration_minutes):
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with get_db() as db:
         await db.execute("""
             INSERT INTO autodelete_config (channel_id, guild_id, duration_minutes)
             VALUES (?, ?, ?)
@@ -466,19 +545,17 @@ async def set_autodelete_config(channel_id, guild_id, duration_minutes):
         await db.commit()
 
 async def get_autodelete_configs():
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         async with db.execute("SELECT * FROM autodelete_config") as cursor:
             return await cursor.fetchall()
 
 async def delete_autodelete_config(channel_id):
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with get_db() as db:
         await db.execute("DELETE FROM autodelete_config WHERE channel_id = ?", (channel_id,))
         await db.commit()
 
-# User Departures
 async def add_user_departure(user_id, guild_id):
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with get_db() as db:
         await db.execute("""
             INSERT OR REPLACE INTO user_departures (user_id, guild_id, departed_at)
             VALUES (?, ?, CURRENT_TIMESTAMP)
@@ -486,19 +563,15 @@ async def add_user_departure(user_id, guild_id):
         await db.commit()
 
 async def remove_user_departure(user_id):
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with get_db() as db:
         await db.execute("DELETE FROM user_departures WHERE user_id = ?", (user_id,))
         await db.commit()
 
 async def get_departed_users(hours=24):
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
+    async with get_db() as db:
         sql = "SELECT * FROM user_departures WHERE departed_at < datetime('now', '-' || ? || ' hours')"
         async with db.execute(sql, (hours,)) as cursor:
             return await cursor.fetchall()
 
-# For debugging/verification
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(init_db())
-    print("Database initialized successfully.")
