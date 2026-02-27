@@ -41,14 +41,6 @@ class DBContext:
 async def init_db():
     try:
         async with get_db() as db:
-            # We explicitly DROP listings/pokemon_species if they exist to force schema update as requested
-            # CAUTION: This wipes data. User approved "Reset Database".
-
-            # Since we are re-defining schema, let's just drop everything to be safe and clean.
-            tables = ['trades', 'listings', 'pokemon_species', 'users', 'events', 'guild_config', 'autodelete_config', 'user_departures']
-            for table in tables:
-                await db.execute(f"DROP TABLE IF EXISTS {table}")
-
             # 1. Users
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS users (
