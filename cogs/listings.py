@@ -353,7 +353,7 @@ class Listings(commands.Cog):
         # If we have species_id but not name (from autocomplete ID)
         if species_id and not pokemon_name:
              # We need to fetch the name.
-             async with await database.get_db() as db:
+             async with database.get_db() as db:
                  async with db.execute("SELECT name, form FROM pokemon_species WHERE id = ?", (species_id,)) as cursor:
                      row = await cursor.fetchone()
                      if row:
