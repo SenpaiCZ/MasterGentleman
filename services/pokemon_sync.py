@@ -26,7 +26,9 @@ async def scrape_pokemon_data(pokedex_num=None, progress_callback=None):
     print("Starting Pokemon GO data sync...")
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
     }
 
     async with database.get_db() as db:
@@ -54,7 +56,8 @@ async def scrape_pokemon_data(pokedex_num=None, progress_callback=None):
                 tasks = [sem_process(i) for i in range(1, total + 1)]
 
                 # Use as_completed to report progress
-                for i, _ in enumerate(asyncio.as_completed(tasks), 1):
+                for i, future in enumerate(asyncio.as_completed(tasks), 1):
+                    await future
                     if progress_callback and i % 10 == 0:
                         await progress_callback(i, total)
 
@@ -63,22 +66,30 @@ async def scrape_pokemon_data(pokedex_num=None, progress_callback=None):
 
     print("Pokemon data sync complete.")
 
+async def fetch_url(session, url):
+    """
+    Helper to fetch a URL with error handling and rate limiting.
+    """
+    try:
+        async with session.get(url) as response:
+            if response.status == 404:
+                return None
+            if response.status != 200:
+                logger.error(f"Failed to fetch {url}: {response.status}")
+                return None
+            return await response.text()
+    except Exception as e:
+        logger.error(f"Error fetching {url}: {e}")
+        return None
+
 async def process_pokemon_family(db, session, pokedex_num):
     """
     Fetches the main pokemon page, parses base form, and discovers/fetches other forms.
     """
     url = f"{BASE_URL}/pokemon/{pokedex_num}"
-    try:
-        async with session.get(url) as response:
-            if response.status == 404:
-                print(f"Pokemon #{pokedex_num} not found (404). Skipping.")
-                return
-            if response.status != 200:
-                logger.error(f"Failed to fetch {url}: {response.status}")
-                return
-            html = await response.text()
-    except Exception as e:
-        logger.error(f"Error fetching {url}: {e}")
+    html = await fetch_url(session, url)
+    if not html:
+        print(f"Skipping #{pokedex_num} (Failed to fetch or not found)")
         return
 
     soup = BeautifulSoup(html, 'html.parser')
@@ -97,8 +108,11 @@ async def process_pokemon_family(db, session, pokedex_num):
     best_moveset = parse_best_moveset(soup)
     costumes = parse_costumes(soup)
 
+    # Determine dynamax status from FAQ
+    can_dynamax = parse_dynamax_status(soup, base_name)
+
     # Upsert Base Form
-    await upsert_species(db, pokedex_num, base_name, "Normal", types, stats, image_url, shiny_image_url, tier_data, best_moveset, costumes)
+    await upsert_species(db, pokedex_num, base_name, "Normal", types, stats, image_url, shiny_image_url, tier_data, best_moveset, costumes, can_dynamax)
     print(f"Synced #{pokedex_num} {base_name} (Normal)")
 
     # --- 2. Discover Forms ---
@@ -132,11 +146,8 @@ async def process_pokemon_family(db, session, pokedex_num):
         await process_single_form(db, session, pokedex_num, form_url, base_name)
 
 async def process_single_form(db, session, pokedex_num, url, base_name):
-    try:
-        async with session.get(url) as response:
-            if response.status != 200: return
-            html = await response.text()
-    except:
+    html = await fetch_url(session, url)
+    if not html:
         return
 
     soup = BeautifulSoup(html, 'html.parser')
@@ -170,8 +181,15 @@ async def process_single_form(db, session, pokedex_num, url, base_name):
     tier_data = parse_tier_ranking(soup)
     costumes = parse_costumes(soup)
 
+    # Determine dynamax status from FAQ
+    # We check if the form name is part of the name used in FAQ, often FAQ refers to the base name
+    # But usually db.pokemongohub.net pages are specific to the form.
+    # The FAQ check logic is generic based on the soup of the current page.
+    full_name = f"{form_name} {base_name}" if form_name != "Normal" else base_name
+    can_dynamax = parse_dynamax_status(soup, full_name)
+
     # Upsert
-    await upsert_species(db, pokedex_num, base_name, form_name, types, stats, image_url, shiny_image_url, tier_data, best_moveset, costumes)
+    await upsert_species(db, pokedex_num, base_name, form_name, types, stats, image_url, shiny_image_url, tier_data, best_moveset, costumes, can_dynamax)
     print(f"  -> Synced #{pokedex_num} {base_name} ({form_name})")
 
 
@@ -228,43 +246,116 @@ def parse_stats(soup):
 
     return stats
 
+def parse_dynamax_status(soup, pokemon_name):
+    """
+    Parses the FAQ section to determine if the Pokemon can Dynamax.
+    Looks for the question "Can [Name] Dynamax in Pokémon GO?"
+    """
+    # Find the FAQ section
+    faq_section = soup.find('section', class_=re.compile(r'PokemonFAQ_faqSection__'))
+    if not faq_section:
+        return False
+
+    # Find all questions
+    questions = faq_section.find_all('div', itemprop='mainEntity')
+
+    for q in questions:
+        question_header = q.find('h3', itemprop='name')
+        if not question_header:
+            continue
+
+        question_text = question_header.get_text().lower()
+        if "can" in question_text and "dynamax" in question_text:
+            # Found the dynamax question. Check the answer.
+            answer_div = q.find('div', itemprop='acceptedAnswer')
+            if answer_div:
+                answer_text = answer_div.get_text().lower()
+                # Check for positive confirmation
+                # "Bulbasaur can Dynamax in Pokémon GO." vs "Ledyba cannot Dynamax in Pokémon GO."
+                if "can dynamax" in answer_text and "cannot" not in answer_text:
+                    return True
+                if "cannot dynamax" in answer_text:
+                    return False
+
+    return False
+
 def parse_best_moveset(soup):
     """
-    Parses the 'Best moves and movesets' section.
-    Returns a dict with details or None.
+    Parses the 'Best moves and movesets' section using the MovesetCard structure.
+    Returns a JSON string with details or None.
     """
-    # Look for header
-    header = soup.find(lambda tag: tag.name in ['h2', 'h3'] and "best moves and movesets" in tag.get_text().lower())
+    # Look for the MovesetCard
+    # <div class="MovesetCard_card__B361_"...>
+    card = soup.find('div', class_=re.compile(r'MovesetCard_card__'))
+    if not card: return None
+
+    header = card.find('header', class_=re.compile(r'MovesetCard_header__'))
     if not header: return None
 
-    # Usually the paragraph immediately after describes it
-    paragraph = header.find_next('p')
-    if not paragraph: return None
-
-    text = paragraph.get_text()
-
-    # Regex to extract info
-    # Pattern: "... best moveset is [Move1] and [Move2], with [DPS] DPS ... and [TDO] TDO ..."
-    # Note: Move names can contain spaces.
+    # The header text usually contains the summary:
+    # "Bulbasaur's best moveset is Vine Whip and Power Whip, with 6.85 DPS... These moves are boosted by Sunny weather."
+    text = header.get_text()
 
     moveset_data = {}
 
-    # Match moves, DPS, TDO
-    # Example: "Bulbasaur's best moveset is Vine Whip and Power Whip, with 6.85 DPS (damage per second) and 57.5 TDO (total damage output)."
-    match = re.search(r"best moveset is (.*?) and (.*?), with ([\d.]+) DPS.*?and ([\d.]+) TDO", text)
-    if match:
-        moveset_data['fast_move'] = match.group(1).strip()
-        moveset_data['charged_move'] = match.group(2).strip()
-        moveset_data['dps'] = match.group(3)
-        moveset_data['tdo'] = match.group(4)
+    # Extract Moves
+    # Regex: "... best moveset is (.*?) and (.*?), with"
+    moves_match = re.search(r"best moveset is (.*?) and (.*?), with", text)
+    if moves_match:
+        moveset_data['fast_move'] = moves_match.group(1).strip()
+        moveset_data['charged_move'] = moves_match.group(2).strip()
 
-    # Match Weather
-    # Example: "These moves are boosted by Sunny weather."
-    weather_match = re.search(r"boosted by (.*?) weather", text)
-    if weather_match:
-        moveset_data['weather'] = weather_match.group(1).strip()
+    # Extract DPS and TDO from the stats list
+    # <ul class="MovesetCard_stats__3Czln">
+    #   <li class="MovesetCard_stat__RtCCD"><span>DPS</span><strong>6.85</strong></li>
+    #   <li class="MovesetCard_stat__RtCCD"><span>TDO</span><strong>57.50</strong></li>
+    stats_list = card.find('ul', class_=re.compile(r'MovesetCard_stats__'))
+    if stats_list:
+        items = stats_list.find_all('li')
+        for item in items:
+            label = item.find('span')
+            value = item.find('strong')
+            if label and value:
+                l_text = label.get_text().strip().lower()
+                v_text = value.get_text().strip()
 
-    return json.dumps(moveset_data) if moveset_data else None
+                if l_text == 'dps':
+                    moveset_data['dps'] = v_text
+                elif l_text == 'tdo':
+                    moveset_data['tdo'] = v_text
+                elif l_text == 'weather':
+                    # Weather might be text inside strong or a list of images/text
+                    # Example: <strong><ul ...><li>...<span>Sunny</span>...</li></ul></strong>
+                    # Or simple text if parsing plain text from header failed?
+
+                    # Try to extract text from the list items if they exist
+                    weather_texts = []
+                    weather_list = value.find('ul')
+                    if weather_list:
+                        w_items = weather_list.find_all('li')
+                        for w in w_items:
+                            w_span = w.find('span') # class="WeatherInfluences_weatherText__..."
+                            if w_span:
+                                weather_texts.append(w_span.get_text().strip())
+                            else:
+                                # Fallback: try image alt text?
+                                img = w.find('img')
+                                if img and img.get('alt'):
+                                    weather_texts.append(img.get('alt').title())
+
+                    if weather_texts:
+                        moveset_data['weather'] = ", ".join(weather_texts)
+
+    # Fallback to text parsing for Weather if not found in stats list
+    if 'weather' not in moveset_data:
+        weather_match = re.search(r"boosted by (.*?) weather", text)
+        if weather_match:
+            moveset_data['weather'] = weather_match.group(1).strip()
+
+    if not moveset_data:
+        return None
+
+    return json.dumps(moveset_data)
 
 def parse_tier_ranking(soup):
     """
@@ -526,12 +617,12 @@ def get_text(soup, tag):
     t = soup.find(tag)
     return t.text.strip() if t else None
 
-async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, shiny_image_url, tier_data, best_moveset, costumes):
+async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, shiny_image_url, tier_data, best_moveset, costumes, can_dynamax):
     type1 = types[0] if len(types) > 0 else None
     type2 = types[1] if len(types) > 1 else None
 
     # Flags
-    can_dynamax = "Gigantamax" in form
+    # can_dynamax passed as arg from FAQ parsing
     can_gigantamax = "Gigantamax" in form
     can_mega = "Mega" in form or "Primal" in form
 
@@ -542,14 +633,10 @@ async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, s
     max_cp = stats.get('max_cp', 0)
     buddy_distance = stats.get('buddy_distance', 0)
 
-    sp_atk = 0
-    sp_def = 0
-    speed = 0
-
     await database.upsert_pokemon_species(
         pokedex_num, name, form, type1, type2, image_url, shiny_image_url,
         can_dynamax, can_gigantamax, can_mega,
-        hp, attack, defense, sp_atk, sp_def, speed, max_cp,
+        hp, attack, defense, max_cp,
         buddy_distance, tier_data, best_moveset, costumes
     )
 
