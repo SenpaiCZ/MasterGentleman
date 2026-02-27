@@ -87,8 +87,16 @@ async def scrape_pokemon_data():
                     # Continue to upsert this form
                     pass
 
-                icon_span = cols[0].find('span', class_='img-fixed')
-                image_url = icon_span.get('data-src') if icon_span else None
+                # New logic for image scraping (picture > img)
+                image_url = None
+                img_tag = cols[0].find('img', class_='icon-pkmn')
+                if img_tag:
+                    image_url = img_tag.get('src')
+
+                # Fallback to old logic just in case
+                if not image_url:
+                    icon_span = cols[0].find('span', class_='img-fixed')
+                    image_url = icon_span.get('data-src') if icon_span else None
 
                 # Upsert Logic
                 async with db.execute("SELECT id FROM pokemon_species WHERE pokedex_num = ? AND form = ?", (pokedex_num, form)) as cursor:
