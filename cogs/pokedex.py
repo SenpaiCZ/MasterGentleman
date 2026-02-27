@@ -81,20 +81,32 @@ class Pokedex(commands.Cog):
         if species['type2']:
             description += f" / {species['type2']}"
 
-        description += "\n\n**Base Stats (MSG):**\n"
-        description += f"❤️ HP: {self._create_stat_bar(species['hp'])}\n"
-        description += f"⚔️ Atk: {self._create_stat_bar(species['attack'])}\n"
-        description += f"🛡️ Def: {self._create_stat_bar(species['defense'])}\n"
-        description += f"💥 Sp.A: {self._create_stat_bar(species['sp_atk'])}\n"
-        description += f"🔰 Sp.D: {self._create_stat_bar(species['sp_def'])}\n"
-        description += f"💨 Spe: {self._create_stat_bar(species['speed'])}\n"
+        description += "\n\n**Base Stats (Pokemon GO):**\n"
 
-        total = species['hp'] + species['attack'] + species['defense'] + species['sp_atk'] + species['sp_def'] + species['speed']
-        description += f"\n**Total:** {total}"
+        # Max stats in GO are roughly: Atk ~500, Def ~500, HP ~500. Using 300 for nicer bars for average mons.
+        # Blissey HP is huge so we might cap it or just let it fill.
+        # Let's use 300 as visual max for bars, but clamp.
+
+        description += f"⚔️ **Attack:** {self._create_stat_bar(species['attack'], 400)}\n"
+        description += f"🛡️ **Defense:** {self._create_stat_bar(species['defense'], 400)}\n"
+        description += f"❤️ **Stamina:** {self._create_stat_bar(species['hp'], 400)}\n"
+
+        # Check for max_cp if available (migrated schema might not have it populated yet for old rows)
+        if 'max_cp' in species and species['max_cp'] > 0:
+            description += f"\n💪 **Max CP (Lvl 50):** {species['max_cp']}"
 
         embed = discord.Embed(title=title, description=description, color=embed_color)
 
         if species['image_url']:
+            # Set as main image as requested
+            embed.set_image(url=species['image_url'])
+            # Also keep thumbnail for better layout if main image is large?
+            # User said "Small thumbnail is good enough, but there was no image last time I tried..."
+            # Let's use set_thumbnail as primary if the image is small icon-like, but GO Hub images are often large.
+            # If we want to guarantee visibility, set_image is safer for large art.
+            # However, standard Pokedex often uses Thumbnail.
+            # Let's stick to set_thumbnail as per user saying "Small thumbnail is good enough"
+            # BUT ensure it's actually working.
             embed.set_thumbnail(url=species['image_url'])
 
         # Features
@@ -106,10 +118,8 @@ class Pokedex(commands.Cog):
         if features:
             embed.add_field(name="Capabilities in GO", value=", ".join(features), inline=False)
 
-        # Links
-        links = f"[Serebii](https://www.serebii.net/pokemon/{species['name'].lower()}) | "
-        links += f"[Bulbapedia](https://bulbapedia.bulbagarden.net/wiki/{species['name'].replace(' ', '_')}_(Pok%C3%A9mon)) | "
-        links += f"[GO Hub](https://db.pokemongohub.net/pokemon/{species['pokedex_num']})"
+        # Links - Focused on GO
+        links = f"[GO Hub Database](https://db.pokemongohub.net/pokemon/{species['pokedex_num']})"
         embed.add_field(name="More Info", value=links, inline=False)
 
         await interaction.response.send_message(embed=embed)

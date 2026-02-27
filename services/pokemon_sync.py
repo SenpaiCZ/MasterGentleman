@@ -122,7 +122,7 @@ async def process_single_form(db, session, pokedex_num, url, base_name):
 
 
 def parse_stats(soup):
-    stats = {'attack': 0, 'defense': 0, 'hp': 0}
+    stats = {'attack': 0, 'defense': 0, 'hp': 0, 'max_cp': 0}
     text = soup.get_text()
 
     atk_match = re.search(r'Attack\s+(\d+)', text)
@@ -133,6 +133,13 @@ def parse_stats(soup):
 
     hp_match = re.search(r'Stamina\s+(\d+)', text)
     if hp_match: stats['hp'] = int(hp_match.group(1))
+
+    # Look for Max CP (Level 50) in text
+    # The page often has "Max CP 1260 CP" or similar in a table
+    # We look for "Max CP" followed by numbers
+    max_cp_match = re.search(r'Max CP\s+(\d+)', text)
+    if max_cp_match:
+        stats['max_cp'] = int(max_cp_match.group(1))
 
     return stats
 
@@ -227,6 +234,7 @@ async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, s
     hp = stats.get('hp', 0)
     attack = stats.get('attack', 0)
     defense = stats.get('defense', 0)
+    max_cp = stats.get('max_cp', 0)
 
     sp_atk = 0
     sp_def = 0
@@ -235,7 +243,7 @@ async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, s
     await database.upsert_pokemon_species(
         pokedex_num, name, form, type1, type2, image_url, shiny_image_url,
         can_dynamax, can_gigantamax, can_mega,
-        hp, attack, defense, sp_atk, sp_def, speed
+        hp, attack, defense, sp_atk, sp_def, speed, max_cp
     )
 
 if __name__ == "__main__":

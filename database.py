@@ -87,7 +87,7 @@ async def init_db():
             async with db.execute("PRAGMA table_info(pokemon_species)") as cursor:
                 columns = [row['name'] for row in await cursor.fetchall()]
 
-            new_columns = ['hp', 'attack', 'defense', 'sp_atk', 'sp_def', 'speed']
+            new_columns = ['hp', 'attack', 'defense', 'sp_atk', 'sp_def', 'speed', 'max_cp']
             for col in new_columns:
                 if col not in columns:
                     logger.info(f"Adding missing column {col} to pokemon_species table.")
@@ -242,7 +242,7 @@ async def get_account(account_id):
 
 async def upsert_pokemon_species(pokedex_num, name, form, type1, type2=None, image_url=None, shiny_image_url=None,
                                  can_dynamax=False, can_gigantamax=False, can_mega=False,
-                                 hp=0, attack=0, defense=0, sp_atk=0, sp_def=0, speed=0):
+                                 hp=0, attack=0, defense=0, sp_atk=0, sp_def=0, speed=0, max_cp=0):
     """Inserts or updates a pokemon species."""
     async with get_db() as db:
         # Check if exists
@@ -254,10 +254,10 @@ async def upsert_pokemon_species(pokedex_num, name, form, type1, type2=None, ima
             await db.execute("""
                 UPDATE pokemon_species
                 SET name=?, type1=?, type2=?, image_url=?, shiny_image_url=?, can_dynamax=?, can_gigantamax=?, can_mega=?,
-                    hp=?, attack=?, defense=?, sp_atk=?, sp_def=?, speed=?
+                    hp=?, attack=?, defense=?, sp_atk=?, sp_def=?, speed=?, max_cp=?
                 WHERE id=?
             """, (name, type1, type2, image_url, shiny_image_url, can_dynamax, can_gigantamax, can_mega,
-                  hp, attack, defense, sp_atk, sp_def, speed, row['id']))
+                  hp, attack, defense, sp_atk, sp_def, speed, max_cp, row['id']))
             await db.commit()
             return row['id']
         else:
@@ -266,12 +266,12 @@ async def upsert_pokemon_species(pokedex_num, name, form, type1, type2=None, ima
                 INSERT INTO pokemon_species (
                     pokedex_num, name, form, type1, type2, image_url, shiny_image_url,
                     can_dynamax, can_gigantamax, can_mega,
-                    hp, attack, defense, sp_atk, sp_def, speed
+                    hp, attack, defense, sp_atk, sp_def, speed, max_cp
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (pokedex_num, name, form, type1, type2, image_url, shiny_image_url,
                   can_dynamax, can_gigantamax, can_mega,
-                  hp, attack, defense, sp_atk, sp_def, speed))
+                  hp, attack, defense, sp_atk, sp_def, speed, max_cp))
             await db.commit()
             return cursor.lastrowid
 
