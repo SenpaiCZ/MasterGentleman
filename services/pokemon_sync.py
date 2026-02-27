@@ -40,18 +40,23 @@ async def scrape_pokemon_data(pokedex_num=None, progress_callback=None):
                 except Exception as e:
                     logger.error(f"Error processing #{pokedex_num}: {e}")
             else:
-                # Scrape all Pokemon
+                # Scrape all Pokemon with Concurrency
                 total = MAX_POKEMON_ID
-                for current_id in range(1, total + 1):
-                    try:
-                        await process_pokemon_family(db, session, current_id)
-                        if progress_callback and current_id % 10 == 0:
-                            await progress_callback(current_id, total)
-                    except Exception as e:
-                        logger.error(f"Error processing #{current_id}: {e}")
+                sem = asyncio.Semaphore(10)  # Limit concurrent requests
 
-                    # Polite delay
-                    await asyncio.sleep(1.0)
+                async def sem_process(current_id):
+                    async with sem:
+                        try:
+                            await process_pokemon_family(db, session, current_id)
+                        except Exception as e:
+                            logger.error(f"Error processing #{current_id}: {e}")
+
+                tasks = [sem_process(i) for i in range(1, total + 1)]
+
+                # Use as_completed to report progress
+                for i, _ in enumerate(asyncio.as_completed(tasks), 1):
+                    if progress_callback and i % 10 == 0:
+                        await progress_callback(i, total)
 
                 if progress_callback:
                     await progress_callback(total, total)
@@ -90,8 +95,10 @@ async def process_pokemon_family(db, session, pokedex_num):
     image_url, shiny_image_url = parse_images(soup)
     tier_data = parse_tier_ranking(soup)
 
+    best_moveset = parse_best_moveset(soup)
+
     # Upsert Base Form
-    await upsert_species(db, pokedex_num, base_name, "Normal", types, stats, image_url, shiny_image_url, tier_data)
+    await upsert_species(db, pokedex_num, base_name, "Normal", types, stats, image_url, shiny_image_url, tier_data, best_moveset)
     print(f"Synced #{pokedex_num} {base_name} (Normal)")
 
     # --- 2. Discover Forms ---
@@ -134,40 +141,40 @@ async def process_single_form(db, session, pokedex_num, url, base_name):
     if "Hisui" in form_name: form_name = "Hisuian"
     if "Paldea" in form_name: form_name = "Paldean"
 
+    best_moveset = parse_best_moveset(soup)
+
     stats = parse_stats(soup)
     types = parse_types(soup)
     image_url, shiny_image_url = parse_images(soup)
     tier_data = parse_tier_ranking(soup)
 
     # Upsert
-    await upsert_species(db, pokedex_num, base_name, form_name, types, stats, image_url, shiny_image_url, tier_data)
+    await upsert_species(db, pokedex_num, base_name, form_name, types, stats, image_url, shiny_image_url, tier_data, best_moveset)
     print(f"  -> Synced #{pokedex_num} {base_name} ({form_name})")
 
 
 def parse_stats(soup):
     stats = {'attack': 0, 'defense': 0, 'hp': 0, 'max_cp': 0, 'buddy_distance': 0}
 
-    # Locate the stats table or section
-    # Based on HTML: <strong class="PokemonStat_atk__c81C8 ...">...</strong>
-    # But table structure is more reliable:
-    # <tr><th>Attack</th><td><strong>...</strong></td></tr>
+    # Helper to extract first integer
+    def extract_int(s):
+        match = re.search(r'(\d+)', s)
+        return int(match.group(1)) if match else 0
 
-    # We look for table rows with headers matching stats
+    # More robust parsing: look for rows where header contains the key
+    # Use re to be insensitive to case and whitespace
+
     rows = soup.find_all('tr')
     for row in rows:
         header = row.find('th')
         if not header: continue
 
+        # Get all text from header, stripped and lowercased
         header_text = header.get_text().strip().lower()
+
         value_cell = row.find('td')
         if not value_cell: continue
-
         value_text = value_cell.get_text().strip()
-
-        # Helper to extract first integer
-        def extract_int(s):
-            match = re.search(r'(\d+)', s)
-            return int(match.group(1)) if match else 0
 
         if 'attack' in header_text:
             stats['attack'] = extract_int(value_text)
@@ -180,7 +187,49 @@ def parse_stats(soup):
         elif 'buddy distance' in header_text:
             stats['buddy_distance'] = extract_int(value_text)
 
+    # Fallback: if values are still 0, maybe they are not in a table but in a list or div structure?
+    # Based on user report "Bulbasaur has Attack 118, but bot has 29" -> 29 is low, might be level 15 CP?
+    # If stats are 0, try searching by text keywords globally in the soup (risky but better than 0)
+
     return stats
+
+def parse_best_moveset(soup):
+    """
+    Parses the 'Best moves and movesets' section.
+    Returns a dict with details or None.
+    """
+    # Look for header
+    header = soup.find(lambda tag: tag.name in ['h2', 'h3'] and "best moves and movesets" in tag.get_text().lower())
+    if not header: return None
+
+    # Usually the paragraph immediately after describes it
+    paragraph = header.find_next('p')
+    if not paragraph: return None
+
+    text = paragraph.get_text()
+
+    # Regex to extract info
+    # Pattern: "... best moveset is [Move1] and [Move2], with [DPS] DPS ... and [TDO] TDO ..."
+    # Note: Move names can contain spaces.
+
+    moveset_data = {}
+
+    # Match moves, DPS, TDO
+    # Example: "Bulbasaur's best moveset is Vine Whip and Power Whip, with 6.85 DPS (damage per second) and 57.5 TDO (total damage output)."
+    match = re.search(r"best moveset is (.*?) and (.*?), with ([\d.]+) DPS.*?and ([\d.]+) TDO", text)
+    if match:
+        moveset_data['fast_move'] = match.group(1).strip()
+        moveset_data['charged_move'] = match.group(2).strip()
+        moveset_data['dps'] = match.group(3)
+        moveset_data['tdo'] = match.group(4)
+
+    # Match Weather
+    # Example: "These moves are boosted by Sunny weather."
+    weather_match = re.search(r"boosted by (.*?) weather", text)
+    if weather_match:
+        moveset_data['weather'] = weather_match.group(1).strip()
+
+    return json.dumps(moveset_data) if moveset_data else None
 
 def parse_tier_ranking(soup):
     """
@@ -316,7 +365,7 @@ def get_text(soup, tag):
     t = soup.find(tag)
     return t.text.strip() if t else None
 
-async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, shiny_image_url, tier_data):
+async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, shiny_image_url, tier_data, best_moveset):
     type1 = types[0] if len(types) > 0 else None
     type2 = types[1] if len(types) > 1 else None
 
@@ -340,7 +389,7 @@ async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, s
         pokedex_num, name, form, type1, type2, image_url, shiny_image_url,
         can_dynamax, can_gigantamax, can_mega,
         hp, attack, defense, sp_atk, sp_def, speed, max_cp,
-        buddy_distance, tier_data
+        buddy_distance, tier_data, best_moveset
     )
 
 if __name__ == "__main__":
