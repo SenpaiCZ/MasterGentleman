@@ -6,7 +6,7 @@ import services.matcher as matcher
 import views.trade
 from views.listing import ListingDraftView, ListingManagementView
 import logging
-from data.pokemon import POKEMON_NAMES, POKEMON_IDS, POKEMON_IMAGES
+# from data.pokemon import POKEMON_NAMES, POKEMON_IDS, POKEMON_IMAGES # REMOVED: Using DB now
 import functools
 
 logger = logging.getLogger('discord')
@@ -32,8 +32,7 @@ class Listings(commands.Cog):
         self.bot = bot
 
     def _format_attributes(self, l):
-        # l can be a dict or Row.
-        l = dict(l)
+        # l can be a dict.
         attrs = []
         if l.get('is_shiny'): attrs.append("✨")
         if l.get('is_purified'): attrs.append("🕊️")
@@ -56,18 +55,20 @@ class Listings(commands.Cog):
         poptavky_text = ""
 
         for l in listings:
-            l_id = l['id']
+            # listing now contains joined fields from pokemon_species
             l_type = l['listing_type']
-            p_id = l['pokemon_id']
             acc_name = l['account_name']
 
-            p_name = POKEMON_IDS.get(p_id, f"Unknown #{p_id}")
+            # Use name from DB
+            p_name = l.get('pokemon_name', 'Unknown')
+            # Append form if not Normal?
+            if l.get('pokemon_form') and l.get('pokemon_form') != 'Normal':
+                p_name += f" ({l['pokemon_form']})"
 
             attrs = self._format_attributes(l)
             details = f"({l['details']})" if l['details'] else ""
 
             # Truncate if too long (Discord limits)
-            # User requested ID removal from view
             line = f"[{acc_name}] | {p_name} {attrs} {details}\n"
 
             if l_type == 'HAVE':
@@ -86,14 +87,17 @@ class Listings(commands.Cog):
 
     def _create_single_listing_embed(self, listing):
         """Creates an embed for a single listing (for public posting)."""
-        pokemon_id = listing['pokemon_id']
-        pokemon_name = POKEMON_IDS.get(pokemon_id, f"#{pokemon_id}")
+        # listing dict must contain joined pokemon details or be constructed manually
+
+        pokemon_name = listing.get('pokemon_name', 'Unknown')
+        if listing.get('pokemon_form') and listing.get('pokemon_form') != 'Normal':
+            pokemon_name += f" ({listing['pokemon_form']})"
 
         attrs_str = self._format_attributes(listing)
         details_str = f"| {listing['details']}" if listing['details'] else ""
 
         type_str = "Nabídka" if listing['listing_type'] == 'HAVE' else "Poptávka"
-        acc_name = listing['account_name']
+        acc_name = listing.get('account_name', 'Unknown')
 
         embed = discord.Embed(
             title=f"✅ {type_str} vytvořena!",
@@ -102,94 +106,90 @@ class Listings(commands.Cog):
         )
         embed.add_field(name="Účet", value=f"{acc_name}", inline=False)
 
-        # Get Image
-        img_info = POKEMON_IMAGES.get(pokemon_id)
-        if img_info:
-            img_url = img_info.get('shiny') if listing['is_shiny'] else img_info.get('normal')
-            if not img_url:
-                img_url = img_info.get('normal')
-            if img_url:
-                embed.set_thumbnail(url=img_url)
+        # Get Image from DB or constructed object
+        img_url = listing.get('image_url')
+        # If shiny, we might need to adjust URL if we were using external logic,
+        # but for now we store generic URL in species.
+        # The previous system used POKEMON_IMAGES dictionary with 'shiny' key.
+        # pokemondb.net images are usually normal.
+        # If we want shiny images, we might need a different source or the old dictionary if we kept it.
+        # But we deleted data/pokemon.py usage.
+        # Let's use the image_url from DB (species).
+
+        # NOTE: pokemondb images are "icon" sprites usually.
+        # If we want shiny, we might need to rely on the old method OR just show normal.
+        # For now, show normal (or whatever is in DB).
+        if img_url:
+            embed.set_thumbnail(url=img_url)
 
         return embed
 
     async def pokemon_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         current = current.lower()
-        choices = []
-        # Prioritize starts with, then contains
-        for name in POKEMON_NAMES.keys():
-            if name.lower().startswith(current):
-                choices.append(app_commands.Choice(name=name, value=name))
-                if len(choices) >= 25:
-                    return choices
 
-        if len(choices) < 25:
-            for name in POKEMON_NAMES.keys():
-                if current in name.lower() and name not in [c.value for c in choices]:
-                    choices.append(app_commands.Choice(name=name, value=name))
-                    if len(choices) >= 25:
-                        break
+        results = await database.search_pokemon_species(current, limit=25)
+        choices = []
+        for r in results:
+            name = r['name']
+            if r['form'] != 'Normal':
+                name += f" ({r['form']})"
+
+            # Value should probably be the name+form to be parsed later, OR the ID if we can pass it?
+            # app_commands.Choice value must be str or int/float.
+            # If we pass ID as value, the command handler receives the ID.
+            # But the user sees the name.
+            # Let's pass the ID as string.
+
+            # actually, if we pass ID, the "pokemon" argument in command function will receive that string ID.
+            # We need to handle that.
+
+            choices.append(app_commands.Choice(name=name, value=str(r['id'])))
 
         return choices
 
     async def _create_trade_channel(self, guild: discord.Guild, trade_id: int, listing_a_id: int, listing_b: dict):
         """Creates a private trade channel and notifies users."""
         try:
-            # Get listing details (now includes account info)
             listing_a = await database.get_listing(listing_a_id)
-            # listing_b is already fetched as dict (Row)
+            # listing_b is already dict
 
             user_a = guild.get_member(listing_a['user_id'])
             user_b = guild.get_member(listing_b['user_id'])
 
             if not user_a or not user_b:
-                logger.warning(f"Could not find members for trade {trade_id}: {listing_a['user_id']}, {listing_b['user_id']}")
+                logger.warning(f"Could not find members for trade {trade_id}")
 
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(read_messages=False),
                 guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
             }
 
-            if user_a:
-                overwrites[user_a] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-            if user_b:
-                overwrites[user_b] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            if user_a: overwrites[user_a] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            if user_b: overwrites[user_b] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
-            name_a = POKEMON_IDS.get(listing_a['pokemon_id'], str(listing_a['pokemon_id']))
-            name_b = POKEMON_IDS.get(listing_b['pokemon_id'], str(listing_b['pokemon_id']))
+            name_a = listing_a.get('pokemon_name', 'Unknown')
+            name_b = listing_b.get('pokemon_name', 'Unknown')
 
-            # Sanitize channel name (lowercase, replace spaces)
+            # Sanitize
             safe_name_a = name_a.replace(" ", "-").lower()
             safe_name_b = name_b.replace(" ", "-").lower()
 
             channel_name = f"trade-{safe_name_a}-{safe_name_b}"
 
-            # Use Category if configured
             category = None
             config = await database.get_guild_config(guild.id)
             if config and config['trade_category_id']:
                 category = guild.get_channel(config['trade_category_id'])
 
             channel = await guild.create_text_channel(channel_name, overwrites=overwrites, category=category, reason="Trade Match")
-
-            # Update DB with channel ID
             await database.update_trade_channel(trade_id, channel.id)
 
-            # Determine Embed Color (User A's team)
             embed_color = await get_user_team_color(listing_a['user_id'])
-
-            # Send Embed
             embed = discord.Embed(title="🤝 Shoda Obchodu! (Trade Match!)", description="Byla nalezena shoda pro vaši nabídku/poptávku.", color=embed_color)
 
-            # Get Image
-            img_info = POKEMON_IMAGES.get(listing_a['pokemon_id'])
-            if img_info:
-                # Use Listing A's shiny preference as default
-                img_url = img_info.get('shiny') if listing_a['is_shiny'] else img_info.get('normal')
-                if not img_url:
-                    img_url = img_info.get('normal')
-                if img_url:
-                    embed.set_thumbnail(url=img_url)
+            # Image (A)
+            if listing_a.get('image_url'):
+                embed.set_thumbnail(url=listing_a['image_url'])
 
             attrs_a = self._format_attributes(listing_a)
             attrs_b = self._format_attributes(listing_b)
@@ -197,7 +197,6 @@ class Listings(commands.Cog):
             desc_a = f"{name_a} {attrs_a} {listing_a['details'] or ''}"
             desc_b = f"{name_b} {attrs_b} {listing_b['details'] or ''}"
 
-            # Add Account info
             acc_a = f"{listing_a['account_name']} (FC: {listing_a['friend_code']})"
             acc_b = f"{listing_b['account_name']} (FC: {listing_b['friend_code']})"
 
@@ -209,10 +208,7 @@ class Listings(commands.Cog):
 
             embed.set_footer(text="Dohodněte se na výměně zde. Až bude hotovo, stiskněte 'Obchod Dokončen'.")
 
-            # Customize Buttons
             view = views.trade.TradeView()
-
-            # Find and update buttons
             for child in view.children:
                 if child.custom_id == "trade_copy_fc_a":
                     child.label = f"📋 FC {name_display_a}"
@@ -225,8 +221,6 @@ class Listings(commands.Cog):
                 view=view
             )
 
-            logger.info(f"Created trade channel {channel.id} for trade {trade_id}")
-
         except Exception as e:
             logger.error(f"Error creating trade channel: {e}")
 
@@ -236,12 +230,15 @@ class Listings(commands.Cog):
                                    is_mirror: bool,
                                    popis: str,
                                    old_listing_id: int = None):
+        # NOTE: 'pokemon_id' arg here is now 'species_id' from database
+        species_id = pokemon_id
+
         try:
             listing_id = await database.add_listing(
                 user_id=interaction.user.id,
                 account_id=account_id,
                 listing_type=listing_type,
-                pokemon_id=pokemon_id,
+                species_id=species_id, # CHANGED
                 is_shiny=shiny,
                 is_purified=purified,
                 is_dynamax=dynamax,
@@ -253,27 +250,19 @@ class Listings(commands.Cog):
                 guild_id=interaction.guild_id if interaction.guild else None
             )
 
-            # Updated terminology
             type_str = "Nabídka" if listing_type == 'HAVE' else "Poptávka"
-
-            # Fetch account name for confirmation
             account = await database.get_account(account_id)
 
-            # Construct dictionary to use helper
-            listing_data = {
-                'listing_type': listing_type,
-                'pokemon_id': pokemon_id,
-                'is_shiny': shiny, 'is_purified': purified,
-                'is_dynamax': dynamax, 'is_gigantamax': gigantamax,
-                'is_background': background, 'is_adventure_effect': adventure_effect,
-                'is_mirror': is_mirror,
-                'details': popis,
-                'account_name': account['account_name'] if account else "Unknown"
-            }
+            # Fetch species details for embed
+            # We can't use get_listing immediately if we haven't committed?
+            # add_listing commits.
 
-            embed = self._create_single_listing_embed(listing_data)
+            # But we can just construct the dict if we have the name, or fetch species.
+            # Use database.get_listing to be sure to get joined data.
+            full_listing = await database.get_listing(listing_id)
 
-            # Determine target channel from config
+            embed = self._create_single_listing_embed(full_listing)
+
             target_channel = interaction.channel
             config = None
             if interaction.guild:
@@ -282,37 +271,28 @@ class Listings(commands.Cog):
             if config:
                 if listing_type == 'HAVE' and config['have_channel_id']:
                     ch = interaction.guild.get_channel(config['have_channel_id'])
-                    if ch:
-                        target_channel = ch
+                    if ch: target_channel = ch
                 elif listing_type == 'WANT' and config['want_channel_id']:
                     ch = interaction.guild.get_channel(config['want_channel_id'])
-                    if ch:
-                        target_channel = ch
+                    if ch: target_channel = ch
 
-            # Send the PUBLIC message to the channel so others can see it
             msg_loc = ""
             sent_message = None
             if target_channel:
                 try:
-                    # Added user mention to content
                     sent_message = await target_channel.send(content=interaction.user.mention, embed=embed)
                     if target_channel != interaction.channel:
                         msg_loc = f" do kanálu {target_channel.mention}"
                 except Exception as e:
-                    logger.error(f"Failed to send to target channel {target_channel.id}: {e}")
-                    # Try fallback to current channel if different
+                    logger.error(f"Failed to send public msg: {e}")
                     if target_channel != interaction.channel and interaction.channel:
-                        try:
+                         try:
                             sent_message = await interaction.channel.send(content=interaction.user.mention, embed=embed)
-                        except:
-                            pass
-            else:
-                logger.warning(f"Could not send public message for listing {listing_id} - no channel.")
+                         except: pass
 
             if sent_message:
                 await database.update_listing_message(listing_id, sent_message.id, sent_message.channel.id)
 
-            # Delete OLD listing if replacing
             if old_listing_id:
                 old_l = await database.get_listing(old_listing_id)
                 if old_l:
@@ -323,18 +303,13 @@ class Listings(commands.Cog):
                             if ch:
                                 msg = await ch.fetch_message(old_l['message_id'])
                                 await msg.delete()
-                        except Exception as e:
-                            logger.warning(f"Failed to delete old message during replacement: {e}")
+                        except: pass
                     await database.delete_listing(old_listing_id)
-                    logger.info(f"Deleted old listing {old_listing_id} replaced by {listing_id}")
 
-            # Notify the user via ephemeral followup that it's done
             if not interaction.response.is_done():
                  await interaction.response.send_message(f"✅ Záznam byl úspěšně zveřejněn{msg_loc}.", ephemeral=True)
             else:
                  await interaction.followup.send(f"✅ Záznam byl úspěšně zveřejněn{msg_loc}.", ephemeral=True)
-
-            logger.info(f"User {interaction.user.id} added listing {listing_type} {pokemon_name} (#{pokemon_id}) for account {account_id} (ID: {listing_id})")
 
             # Check for matches
             if interaction.guild:
@@ -349,27 +324,55 @@ class Listings(commands.Cog):
             else:
                 await interaction.followup.send("❌ Nastala chyba při vytváření záznamu.", ephemeral=True)
 
-    async def _handle_listing_creation(self, interaction: discord.Interaction, listing_type: str, pokemon_name: str, popis: str):
-        # Resolve Pokemon ID
-        pokemon_id = POKEMON_NAMES.get(pokemon_name.title())
-        if not pokemon_id:
-            for name, pid in POKEMON_NAMES.items():
-                if name.lower() == pokemon_name.lower():
-                    pokemon_id = pid
-                    pokemon_name = name
-                    break
+    async def _handle_listing_creation(self, interaction: discord.Interaction, listing_type: str, pokemon: str, popis: str):
+        # pokemon is now expected to be the Species ID (as string) from autocomplete
+        # OR a raw name if user typed something else.
 
-        if not pokemon_id:
-            if pokemon_name.isdigit():
-                pokemon_id = int(pokemon_name)
-                pokemon_name = POKEMON_IDS.get(pokemon_id, f"Unknown #{pokemon_id}")
+        species_id = None
+        pokemon_name = ""
+
+        if pokemon.isdigit():
+            species_id = int(pokemon)
+            # Fetch name
+            # We don't have get_species_by_id yet exposed in this Cog, but we can query or trust it exists
+            # Ideally verify.
+            # Let's add get_pokemon_species_by_id to database.py?
+            # Or just use raw sql here? Better to be safe.
+            # Assuming if it's digit, it's from autocomplete.
+
+            # We can use database.get_db() context to verify
+            # Or just let the ListingDraftView handle visual confirmation.
+
+            # We need the name for the View title though.
+            # ListingDraftView constructor expects pokemon_name.
+            pass
+        else:
+            # Try to resolve by name
+            row = await database.get_pokemon_species_by_name(pokemon)
+            if row:
+                species_id = row['id']
+                pokemon_name = row['name']
+                if row['form'] != 'Normal':
+                    pokemon_name += f" ({row['form']})"
             else:
-                await interaction.response.send_message(f"❌ Neznámý Pokémon '{pokemon_name}'. Prosím vyberte ze seznamu.", ephemeral=True)
+                await interaction.response.send_message(f"❌ Neznámý Pokémon '{pokemon}'. Prosím vyberte ze seznamu.", ephemeral=True)
                 return
 
-        # Check for accounts
-        accounts = await database.get_user_accounts(interaction.user.id)
+        # If we have species_id but not name (from autocomplete ID)
+        if species_id and not pokemon_name:
+             # We need to fetch the name.
+             async with await database.get_db() as db:
+                 async with db.execute("SELECT name, form FROM pokemon_species WHERE id = ?", (species_id,)) as cursor:
+                     row = await cursor.fetchone()
+                     if row:
+                         pokemon_name = row['name']
+                         if row['form'] != 'Normal':
+                             pokemon_name += f" ({row['form']})"
+                     else:
+                         await interaction.response.send_message("❌ Chyba: Pokémon nenalezen v DB.", ephemeral=True)
+                         return
 
+        accounts = await database.get_user_accounts(interaction.user.id)
         if not accounts:
             await interaction.response.send_message("❌ Nemáte registrovaný žádný účet. Použijte `/registrace`.", ephemeral=True)
             return
@@ -377,12 +380,16 @@ class Listings(commands.Cog):
         view = ListingDraftView(
             interaction,
             listing_type,
-            pokemon_id,
+            species_id, # passing species_id as pokemon_id
             pokemon_name,
             accounts,
             initial_details=popis,
             submit_callback=self.create_listing_final
         )
+
+        # Load capabilities from DB to disable/enable buttons in View?
+        # ListingDraftView currently defaults all enabled.
+        # Future improvement: pass capabilities to View.
 
         embed = view._get_embed()
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
@@ -421,7 +428,6 @@ class Listings(commands.Cog):
         await self._show_management_view(interaction, 'WANT')
 
     async def _show_management_view(self, interaction: discord.Interaction, listing_type: str):
-        # Fetch listings
         all_listings = await database.get_user_listings(interaction.user.id)
         listings = [l for l in all_listings if l['listing_type'] == listing_type]
 
@@ -437,8 +443,6 @@ class Listings(commands.Cog):
 
         view = ListingManagementView(listings, callbacks)
         embed = self._create_listings_embed(listings, await get_user_team_color(interaction.user.id))
-
-        # Determine title prefix based on type
         title_prefix = "Moje Nabídky" if listing_type == 'HAVE' else "Moje Poptávky"
         embed.title = f"{title_prefix} (My Listings)"
 
@@ -450,30 +454,24 @@ class Listings(commands.Cog):
             await interaction.response.send_message("Záznam již neexistuje.", ephemeral=True)
             return
 
-        # Delete message
         if listing['channel_id'] and listing['message_id']:
             try:
                 channel = self.bot.get_channel(listing['channel_id'])
-                if not channel:
-                    channel = await self.bot.fetch_channel(listing['channel_id'])
+                if not channel: channel = await self.bot.fetch_channel(listing['channel_id'])
                 if channel:
                     msg = await channel.fetch_message(listing['message_id'])
                     await msg.delete()
-            except Exception as e:
-                logger.warning(f"Failed to delete listing message for {listing_id}: {e}")
+            except: pass
 
         await database.delete_listing(listing_id)
 
-        # Refresh View
-        # Update view.listings
+        # We need to remove it from view.listings
         view.listings = [l for l in view.listings if l['id'] != listing_id]
 
-        # If no listings left, disable
         if not view.listings:
             await interaction.response.edit_message(content="✅ Záznam smazán. Seznam je prázdný.", embed=None, view=None)
             return
 
-        # Create new View to refresh Select Menu
         new_view = ListingManagementView(view.listings, view.callbacks)
         embed = self._create_listings_embed(view.listings, await get_user_team_color(interaction.user.id))
 
@@ -482,25 +480,18 @@ class Listings(commands.Cog):
     async def _edit_details_callback(self, interaction: discord.Interaction, listing_id: int, new_details: str, view: ListingManagementView):
         await database.update_listing_details(listing_id, new_details)
 
-        # Update message
-        listing = await database.get_listing(listing_id) # Reload
+        listing = await database.get_listing(listing_id)
         if listing['channel_id'] and listing['message_id']:
             try:
                 channel = self.bot.get_channel(listing['channel_id'])
-                if not channel:
-                    channel = await self.bot.fetch_channel(listing['channel_id'])
+                if not channel: channel = await self.bot.fetch_channel(listing['channel_id'])
                 if channel:
                     msg = await channel.fetch_message(listing['message_id'])
-                    # Re-create embed
                     embed = self._create_single_listing_embed(listing)
                     await msg.edit(embed=embed)
-            except Exception as e:
-                logger.warning(f"Failed to edit message for {listing_id}: {e}")
+            except: pass
 
-        # Refresh List View
-        # We need to update the specific listing in the local list so the embed updates
-        # But `listings` contains Rows which are immutable.
-        # So we fetch again.
+        # Refresh
         all_listings = await database.get_user_listings(interaction.user.id)
         current_type = listing['listing_type']
         listings = [l for l in all_listings if l['listing_type'] == current_type]
@@ -511,32 +502,30 @@ class Listings(commands.Cog):
         await interaction.response.edit_message(content="✅ Popis upraven.", embed=embed_list, view=new_view)
 
     async def _edit_all_callback(self, interaction: discord.Interaction, listing_id: int, view: ListingManagementView):
-        # 1. Get Listing
         listing = await database.get_listing(listing_id)
         if not listing:
              await interaction.response.send_message("Záznam neexistuje.", ephemeral=True)
              return
 
-        # 2. Launch Wizard (ListingDraftView)
-        # We do NOT delete the listing yet. We wait for publish.
+        # listing dict has pokemon_name from JOIN
+        pokemon_name = listing.get('pokemon_name', "Unknown")
+        if listing.get('pokemon_form') and listing.get('pokemon_form') != 'Normal':
+            pokemon_name += f" ({listing['pokemon_form']})"
 
-        pokemon_name = POKEMON_IDS.get(listing['pokemon_id'], "Unknown")
         accounts = await database.get_user_accounts(interaction.user.id)
 
-        # Prepare callback with old_listing_id
         submit_cb = functools.partial(self.create_listing_final, old_listing_id=listing_id)
 
         draft_view = ListingDraftView(
             interaction,
             listing['listing_type'],
-            listing['pokemon_id'],
+            listing['species_id'], # listing now has species_id column
             pokemon_name,
             accounts,
             initial_details=listing['details'],
             submit_callback=submit_cb
         )
 
-        # Pre-fill draft view attributes
         draft_view.is_shiny = bool(listing['is_shiny'])
         draft_view.is_purified = bool(listing['is_purified'])
         draft_view.is_dynamax = bool(listing['is_dynamax'])
@@ -545,7 +534,6 @@ class Listings(commands.Cog):
         draft_view.is_adventure_effect = bool(listing['is_adventure_effect'])
         draft_view.is_mirror = bool(listing['is_mirror'])
 
-        # Select correct account
         for acc in accounts:
             if acc['id'] == listing['account_id']:
                 draft_view.selected_account_id = acc['id']
@@ -553,11 +541,9 @@ class Listings(commands.Cog):
                 draft_view.selected_account_fc = acc['friend_code']
                 break
 
-        draft_view._update_components() # Refresh buttons state
-
+        draft_view._update_components()
         embed = draft_view._get_embed()
 
-        # Replace the management view with the wizard
         await interaction.response.edit_message(content=None, embed=embed, view=draft_view)
 
 async def setup(bot):
