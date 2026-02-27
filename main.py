@@ -5,6 +5,7 @@ from discord.ext import commands
 import config
 import logging
 import database
+import services.pokemon_sync as pokemon_sync
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +26,16 @@ class TradeBot(commands.Bot):
         # Initialize database
         await database.init_db()
         logger.info("Database initialized.")
+
+        # Check if we need to sync pokemon data
+        async with database.get_db() as db:
+            async with db.execute("SELECT COUNT(*) as count FROM pokemon_species") as cursor:
+                row = await cursor.fetchone()
+                if row['count'] == 0:
+                    logger.info("Pokemon species table empty. Running initial sync...")
+                    await pokemon_sync.scrape_pokemon_data()
+                else:
+                    logger.info(f"Pokemon species table has {row['count']} entries.")
 
         # Load extensions
         for filename in os.listdir('./cogs'):

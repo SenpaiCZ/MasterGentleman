@@ -4,3 +4,4 @@ python-dotenv
 qrcode[pil]
 beautifulsoup4
 pytz
+aiohttp
