@@ -127,21 +127,13 @@ class Listings(commands.Cog):
     async def pokemon_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         current = current.lower()
 
-        results = await database.search_pokemon_species(current, limit=25)
+        # Use extended search (Name or Type)
+        results = await database.search_pokemon_species_extended(current, limit=25)
         choices = []
         for r in results:
             name = r['name']
             if r['form'] != 'Normal':
                 name += f" ({r['form']})"
-
-            # Value should probably be the name+form to be parsed later, OR the ID if we can pass it?
-            # app_commands.Choice value must be str or int/float.
-            # If we pass ID as value, the command handler receives the ID.
-            # But the user sees the name.
-            # Let's pass the ID as string.
-
-            # actually, if we pass ID, the "pokemon" argument in command function will receive that string ID.
-            # We need to handle that.
 
             choices.append(app_commands.Choice(name=name, value=str(r['id'])))
 
