@@ -94,11 +94,11 @@ async def process_pokemon_family(db, session, pokedex_num):
     types = parse_types(soup)
     image_url, shiny_image_url = parse_images(soup)
     tier_data = parse_tier_ranking(soup)
-
     best_moveset = parse_best_moveset(soup)
+    costumes = parse_costumes(soup)
 
     # Upsert Base Form
-    await upsert_species(db, pokedex_num, base_name, "Normal", types, stats, image_url, shiny_image_url, tier_data, best_moveset)
+    await upsert_species(db, pokedex_num, base_name, "Normal", types, stats, image_url, shiny_image_url, tier_data, best_moveset, costumes)
     print(f"Synced #{pokedex_num} {base_name} (Normal)")
 
     # --- 2. Discover Forms ---
@@ -109,9 +109,20 @@ async def process_pokemon_family(db, session, pokedex_num):
 
     for link in links:
         href = link['href']
-        # Check if it matches /pokemon/{id}-...
-        if href.startswith(f"/pokemon/{pokedex_num}-"):
+        # Check if it matches /pokemon/{id}-... or https://db.pokemongohub.net/pokemon/{id}-...
+
+        # Normalize href to full URL for checking
+        if href.startswith('/'):
             full_url = f"{BASE_URL}{href}"
+        elif href.startswith(BASE_URL):
+            full_url = href
+        else:
+            continue
+
+        # Check against pattern
+        expected_prefix = f"{BASE_URL}/pokemon/{pokedex_num}-"
+
+        if full_url.startswith(expected_prefix):
             if full_url not in processed_urls:
                 form_links.add(full_url)
 
@@ -131,8 +142,18 @@ async def process_single_form(db, session, pokedex_num, url, base_name):
     soup = BeautifulSoup(html, 'html.parser')
 
     # Determine form name
-    slug = url.split('/')[-1] # "3-Mega"
-    suffix = slug.replace(f"{pokedex_num}-", "") # "Mega"
+    # url is like https://db.pokemongohub.net/pokemon/19-Alola
+    slug = url.split('/')[-1] # "19-Alola"
+
+    # Sometimes slug might have fragment
+    if '#' in slug:
+        slug = slug.split('#')[0]
+
+    # Remove pokedex_num prefix
+    if slug.startswith(f"{pokedex_num}-"):
+        suffix = slug[len(str(pokedex_num))+1:] # "Alola"
+    else:
+        suffix = slug # Fallback, unlikely if logic is correct
 
     form_name = suffix.replace("-", " ").title() # "Mega"
 
@@ -147,9 +168,10 @@ async def process_single_form(db, session, pokedex_num, url, base_name):
     types = parse_types(soup)
     image_url, shiny_image_url = parse_images(soup)
     tier_data = parse_tier_ranking(soup)
+    costumes = parse_costumes(soup)
 
     # Upsert
-    await upsert_species(db, pokedex_num, base_name, form_name, types, stats, image_url, shiny_image_url, tier_data, best_moveset)
+    await upsert_species(db, pokedex_num, base_name, form_name, types, stats, image_url, shiny_image_url, tier_data, best_moveset, costumes)
     print(f"  -> Synced #{pokedex_num} {base_name} ({form_name})")
 
 
@@ -176,20 +198,33 @@ def parse_stats(soup):
         if not value_cell: continue
         value_text = value_cell.get_text().strip()
 
-        if 'attack' in header_text:
-            stats['attack'] = extract_int(value_text)
-        elif 'defense' in header_text:
-            stats['defense'] = extract_int(value_text)
-        elif 'stamina' in header_text:
-            stats['hp'] = extract_int(value_text)
-        elif 'max cp' in header_text:
-            stats['max_cp'] = extract_int(value_text)
-        elif 'buddy distance' in header_text:
-            stats['buddy_distance'] = extract_int(value_text)
+        # Debug printing
+        # print(f"DEBUG: Header='{header_text}' Value='{value_text}'")
 
-    # Fallback: if values are still 0, maybe they are not in a table but in a list or div structure?
-    # Based on user report "Bulbasaur has Attack 118, but bot has 29" -> 29 is low, might be level 15 CP?
-    # If stats are 0, try searching by text keywords globally in the soup (risky but better than 0)
+        # To prevent overwriting with incorrect tables (e.g. sometimes "Attack" appears in other contexts)
+        # We can try to validate the value is somewhat reasonable or check the table context?
+        # But for now, let's just match.
+
+        val = extract_int(value_text)
+
+        if 'attack' in header_text:
+            # Prevent overwriting if we already have a valid value and this one looks weird?
+            # Or assume the FIRST one is the main stats table?
+            # Usually the main stats table is near the top.
+            if stats['attack'] == 0:
+                stats['attack'] = val
+        elif 'defense' in header_text:
+            if stats['defense'] == 0:
+                stats['defense'] = val
+        elif 'stamina' in header_text:
+            if stats['hp'] == 0:
+                stats['hp'] = val
+        elif 'max cp' in header_text:
+            if stats['max_cp'] == 0:
+                stats['max_cp'] = val
+        elif 'buddy distance' in header_text:
+            if stats['buddy_distance'] == 0:
+                stats['buddy_distance'] = val
 
     return stats
 
@@ -237,17 +272,6 @@ def parse_tier_ranking(soup):
     Returns a list of dicts: [{'category': 'Raid Attacker', 'tier': 'F Tier', 'rank': '#249'}, ...]
     """
     rankings = []
-
-    # Container: PokemonTierRanking_grid__CVnr7
-    # Card: PokemonTierRanking_card__bYYSQ
-
-    # Find all ranking cards
-    # Since class names are hashed/dynamic (e.g. CVnr7), we can look for specific structure or partial match if needed.
-    # But usually Next.js hashed classes are stable per build. The user provided HTML has specific classes.
-    # We can also look for sections with headers.
-
-    # Let's try finding by structure: divs that contain "Tier" or "Rank" text?
-    # Or strict class matching from provided HTML: 'PokemonTierRanking_card__bYYSQ'
 
     cards = soup.find_all('div', class_=re.compile(r'PokemonTierRanking_card__'))
 
@@ -302,11 +326,13 @@ def parse_types(soup):
     return found_types[:2] if found_types else []
 
 def parse_images(soup):
-    """Returns (normal_url, shiny_url)"""
+    """
+    Returns (normal_url, shiny_url).
+    Prioritizes Ingame sprites (icon.png) from the "Regular and Shiny" section.
+    Falls back to Official artwork if Ingame sprites are not found.
+    """
     normal_url = None
     shiny_url = None
-
-    images = soup.find_all('img', src=True)
 
     # Helper to extract nextjs url
     def extract_nextjs_url(src):
@@ -320,52 +346,187 @@ def parse_images(soup):
                 return src
         return src
 
-    # 1. Look for Official
-    for img in images:
-        src = extract_nextjs_url(img['src'])
-        if not src.startswith('http'): src = f"{BASE_URL}{src}"
+    def get_best_url(img_tag):
+        # Prefer srcset first item (often higher quality in Next.js or just easier to find main src)
+        # Actually Next.js srcset has multiple resolutions. We usually want the first one or parsing it.
+        # But our goal is to get the `url` param inside the next/image path if possible.
 
-        if '/images/official/' in src:
-            # We prefer 'medium' or 'full'.
-            if not normal_url:
-                normal_url = src
-            elif 'thumb' in normal_url and ('medium' in src or 'full' in src):
-                normal_url = src
+        # Check srcset
+        srcset = img_tag.get('srcset')
+        if srcset:
+            # "url 1x, url 2x" -> split comma, take first part
+            first_entry = srcset.split(',')[0].strip() # "url 1x"
+            first_url = first_entry.split(' ')[0] # "url"
+            candidate = extract_nextjs_url(first_url)
+            if candidate and 'http' in candidate or candidate.startswith('/'):
+                return candidate
 
-    # 2. Look for Shiny (Home Renders or Ingame)
-    # Search for "Shiny" in alt text or surroundings?
-    # Or look for specific path patterns.
-    # Pokemon Home Shiny: /images/pokemon-home-renders/Shiny/
-    # Ingame Shiny: .s.icon.png
+        # Fallback to src
+        src = img_tag.get('src')
+        return extract_nextjs_url(src)
 
-    for img in images:
-        src = extract_nextjs_url(img['src'])
-        if not src.startswith('http'): src = f"{BASE_URL}{src}"
+    # --- 1. Try "Regular and Shiny" Section (Ingame Sprites) ---
+    # Look for the section with id="regular-and-shiny"
+    # Then find the list immediately following it
 
-        if '/images/pokemon-home-renders/Shiny/' in src:
-            if not shiny_url: shiny_url = src
-            # Prefer higher res if possible?
+    # Finding the UL with class that contains 'PokemonNormalAndShinyComparison_list'
+    comparison_list = soup.find('ul', class_=re.compile(r'PokemonNormalAndShinyComparison_list__'))
 
-        elif '.s.icon.png' in src:
-            # Ingame shiny
-            if not shiny_url: shiny_url = src
+    if comparison_list:
+        # It usually contains two list items: Regular and Shiny
+        items = comparison_list.find_all('li')
+        for item in items:
+            text = item.get_text().lower()
+            img = item.find('img')
+            if not img: continue
 
-    # Fallback for normal if no official
-    if not normal_url:
-        for img in images:
-            src = extract_nextjs_url(img['src'])
+            src = get_best_url(img)
+            if not src: continue
+
             if not src.startswith('http'): src = f"{BASE_URL}{src}"
-            if '/images/pokemon-home-renders/Normal/' in src:
+
+            if 'shiny' in text:
+                shiny_url = src
+            else:
+                # Assume regular if not shiny (or explicitly 'regular')
                 normal_url = src
-                break
+
+    # If we found both, return them.
+    if normal_url and shiny_url:
+        return normal_url, shiny_url
+
+    # --- 2. Fallback: Search globally for Official Artwork ---
+    # If we are missing one or both, try to fill in with official artwork
+    # Only if we don't have the preferred one.
+
+    images = soup.find_all('img', src=True)
+
+    found_official_normal = None
+    found_official_shiny = None
+
+    for img in images:
+        src = get_best_url(img)
+        if not src: continue
+
+        if not src.startswith('http'): src = f"{BASE_URL}{src}"
+
+        # Official Artwork
+        if '/images/official/' in src:
+            if '/images/pokemon-home-renders/Shiny/' in src or 'shiny' in src.lower():
+                 if not found_official_shiny: found_official_shiny = src
+            else:
+                # Prefer medium/full over thumb
+                if not found_official_normal:
+                    found_official_normal = src
+                elif 'thumb' in found_official_normal and ('medium' in src or 'full' in src):
+                    found_official_normal = src
+
+        # Pokemon Home Renders (often used as fallback)
+        elif '/images/pokemon-home-renders/' in src:
+             if 'Shiny' in src:
+                 if not found_official_shiny: found_official_shiny = src
+             elif 'Normal' in src:
+                 if not found_official_normal: found_official_normal = src
+
+    if not normal_url:
+        normal_url = found_official_normal
+    if not shiny_url:
+        shiny_url = found_official_shiny
 
     return normal_url, shiny_url
+
+def parse_costumes(soup):
+    """
+    Parses the 'Costumes' section.
+    Returns a JSON string of a list of dicts:
+    [
+        {
+            'name': 'JAN_2020',
+            'image_url': '...',
+            'shiny_image_url': '...'
+        },
+        ...
+    ]
+    """
+    costumes_data = []
+
+    # Find the UL with class PokemonCostumeSprites_list__...
+    costume_list = soup.find('ul', class_=re.compile(r'PokemonCostumeSprites_list__'))
+
+    if not costume_list:
+        return None
+
+    # Iterate through list items
+    # Each list item is usually one variant (e.g. Regular JAN_2020)
+    # We want to group by costume name if possible, or just list them.
+    # The requirement is: "Bulbasaur has 3 costumes (JAN_2020, SPRING_2020, FALL_2019)... links to costume images might be useful"
+
+    # Structure seems to be:
+    # <li> <a ...> <img src="..."> <div class="Badge...">JAN_2020</div> </a> </li>
+    # <li> <a ...> <img src="..."> <div class="Badge...">JAN_2020 ✨</div> </a> </li>
+
+    # We will aggregate by name.
+
+    temp_costumes = {} # name -> { normal: url, shiny: url }
+
+    items = costume_list.find_all('li')
+
+    for item in items:
+        badge = item.find('div', class_=re.compile(r'Badge_badge__'))
+        if not badge: continue
+
+        raw_name = badge.get_text().strip()
+
+        is_shiny = '✨' in raw_name
+        name = raw_name.replace('✨', '').strip()
+
+        img = item.find('img')
+        if not img: continue
+
+        # Helper to extract nextjs url (copied from parse_images scope or define globally)
+        def extract_nextjs_url(src):
+            if 'url=' in src:
+                try:
+                    start = src.find('url=') + 4
+                    end = src.find('&', start)
+                    if end == -1: end = len(src)
+                    return unquote(src[start:end])
+                except:
+                    return src
+            return src
+
+        def get_best_url(img_tag):
+            srcset = img_tag.get('srcset')
+            if srcset:
+                first_entry = srcset.split(',')[0].strip()
+                first_url = first_entry.split(' ')[0]
+                candidate = extract_nextjs_url(first_url)
+                if candidate and 'http' in candidate or candidate.startswith('/'):
+                    return candidate
+            src = img_tag.get('src')
+            return extract_nextjs_url(src)
+
+        src = get_best_url(img)
+        if not src.startswith('http'): src = f"{BASE_URL}{src}"
+
+        if name not in temp_costumes:
+            temp_costumes[name] = {'name': name, 'image_url': None, 'shiny_image_url': None}
+
+        if is_shiny:
+            temp_costumes[name]['shiny_image_url'] = src
+        else:
+            temp_costumes[name]['image_url'] = src
+
+    # Convert to list
+    costumes_data = list(temp_costumes.values())
+
+    return json.dumps(costumes_data) if costumes_data else None
 
 def get_text(soup, tag):
     t = soup.find(tag)
     return t.text.strip() if t else None
 
-async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, shiny_image_url, tier_data, best_moveset):
+async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, shiny_image_url, tier_data, best_moveset, costumes):
     type1 = types[0] if len(types) > 0 else None
     type2 = types[1] if len(types) > 1 else None
 
@@ -389,7 +550,7 @@ async def upsert_species(db, pokedex_num, name, form, types, stats, image_url, s
         pokedex_num, name, form, type1, type2, image_url, shiny_image_url,
         can_dynamax, can_gigantamax, can_mega,
         hp, attack, defense, sp_atk, sp_def, speed, max_cp,
-        buddy_distance, tier_data, best_moveset
+        buddy_distance, tier_data, best_moveset, costumes
     )
 
 if __name__ == "__main__":
