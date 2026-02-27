@@ -26,12 +26,15 @@ class ListingDescriptionModal(ui.Modal, title="Detaily nabídky/poptávky"):
 
 
 class ListingDraftView(ui.View):
-    def __init__(self, interaction, listing_type, pokemon_id, pokemon_name, accounts, initial_details=None, submit_callback=None):
+    def __init__(self, interaction, listing_type, species_id, pokedex_num, pokemon_name, image_url, shiny_image_url, accounts, initial_details=None, submit_callback=None):
         super().__init__(timeout=180)
         self.original_interaction = interaction
         self.listing_type = listing_type
-        self.pokemon_id = pokemon_id
+        self.species_id = species_id
+        self.pokedex_num = pokedex_num
         self.pokemon_name = pokemon_name
+        self.image_url = image_url
+        self.shiny_image_url = shiny_image_url
         self.accounts = accounts
         self.submit_callback = submit_callback
 
@@ -162,15 +165,28 @@ class ListingDraftView(ui.View):
 
         embed = discord.Embed(title=title, description=desc, color=color)
 
-        # Get Image
-        img_info = POKEMON_IMAGES.get(self.pokemon_id)
-        if img_info:
-            img_url = img_info.get('shiny') if self.is_shiny else img_info.get('normal')
-            if not img_url:
-                img_url = img_info.get('normal')
+        # Get Image Logic
+        # Priority: DB Shiny URL (if shiny) > DB Normal URL > JSON Shiny (if shiny) > JSON Normal
 
-            if img_url:
-                embed.set_thumbnail(url=img_url)
+        final_image_url = None
+
+        if self.is_shiny and self.shiny_image_url:
+            final_image_url = self.shiny_image_url
+        elif self.image_url:
+            # If standard, or shiny but no specific shiny URL
+            final_image_url = self.image_url
+
+        # Fallback to JSON if DB URLs are missing
+        if not final_image_url:
+            img_info = POKEMON_IMAGES.get(self.pokedex_num)
+            if img_info:
+                if self.is_shiny:
+                    final_image_url = img_info.get('shiny') or img_info.get('normal')
+                else:
+                    final_image_url = img_info.get('normal')
+
+        if final_image_url:
+            embed.set_thumbnail(url=final_image_url)
 
         embed.set_footer(text="Upravte detaily pomocí tlačítek a potvrďte zveřejnění.")
         return embed
@@ -247,7 +263,7 @@ class ListingDraftView(ui.View):
                 interaction,
                 self.selected_account_id,
                 self.listing_type,
-                self.pokemon_id,
+                self.species_id,
                 self.pokemon_name,
                 self.is_shiny,
                 self.is_purified,
