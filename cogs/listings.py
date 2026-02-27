@@ -353,6 +353,7 @@ class Listings(commands.Cog):
             species_data.get('image_url'),
             species_data.get('shiny_image_url'),
             accounts,
+            can_dynamax=bool(species_data.get('can_dynamax', False)),
             initial_details=popis,
             submit_callback=self.create_listing_final
         )
@@ -490,6 +491,10 @@ class Listings(commands.Cog):
 
         submit_cb = functools.partial(self.create_listing_final, old_listing_id=listing_id)
 
+        # Need species data to know if can_dynamax
+        species_data = await database.get_pokemon_species_by_id(listing['species_id'])
+        can_dyna = bool(species_data.get('can_dynamax', False)) if species_data else False
+
         draft_view = ListingDraftView(
             interaction,
             listing['listing_type'],
@@ -499,6 +504,7 @@ class Listings(commands.Cog):
             listing.get('image_url'),
             listing.get('shiny_image_url'),
             accounts,
+            can_dynamax=can_dyna,
             initial_details=listing['details'],
             submit_callback=submit_cb
         )
@@ -506,7 +512,7 @@ class Listings(commands.Cog):
         draft_view.is_shiny = bool(listing['is_shiny'])
         draft_view.is_purified = bool(listing['is_purified'])
         draft_view.is_dynamax = bool(listing['is_dynamax'])
-        draft_view.is_gigantamax = bool(listing['is_gigantamax'])
+        # draft_view.is_gigantamax = bool(listing['is_gigantamax']) # Removed
         draft_view.is_background = bool(listing['is_background'])
         draft_view.is_adventure_effect = bool(listing['is_adventure_effect'])
         draft_view.is_mirror = bool(listing['is_mirror'])

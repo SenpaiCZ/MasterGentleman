@@ -88,7 +88,7 @@ class Printing(commands.Cog):
             if warning_msg:
                 content += f"\n{warning_msg}"
 
-            await interaction.followup.send(content=content, file=file)
+            await interaction.followup.send(content=content, file=file, ephemeral=True)
             logger.info(f"Generated print card for account {account['id']} type {typ}")
 
         except Exception as e:

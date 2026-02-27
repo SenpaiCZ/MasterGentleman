@@ -52,7 +52,7 @@ class ListingCountModal(ui.Modal, title="Počet (Quantity)"):
 
 
 class ListingDraftView(ui.View):
-    def __init__(self, interaction, listing_type, species_id, pokedex_num, pokemon_name, image_url, shiny_image_url, accounts, initial_details=None, submit_callback=None):
+    def __init__(self, interaction, listing_type, species_id, pokedex_num, pokemon_name, image_url, shiny_image_url, accounts, can_dynamax=False, initial_details=None, submit_callback=None):
         super().__init__(timeout=180)
         self.original_interaction = interaction
         self.listing_type = listing_type
@@ -62,13 +62,14 @@ class ListingDraftView(ui.View):
         self.image_url = image_url
         self.shiny_image_url = shiny_image_url
         self.accounts = accounts
+        self.can_dynamax = can_dynamax
         self.submit_callback = submit_callback
 
         # State
         self.is_shiny = False
         self.is_purified = False
         self.is_dynamax = False
-        self.is_gigantamax = False
+        # self.is_gigantamax = False  # Removed
         self.is_background = False
         self.is_adventure_effect = False
         self.is_mirror = False
@@ -100,8 +101,9 @@ class ListingDraftView(ui.View):
         # Row 0: Basic Attributes
         self.add_item(self._create_button("Shiny", "✨", self.is_shiny, "toggle_shiny", self.toggle_shiny, 0))
         self.add_item(self._create_button("Purified", "🕊️", self.is_purified, "toggle_purified", self.toggle_purified, 0))
-        self.add_item(self._create_button("Dyna", None, self.is_dynamax, "toggle_dynamax", self.toggle_dynamax, 0))
-        self.add_item(self._create_button("Giga", None, self.is_gigantamax, "toggle_gigantamax", self.toggle_gigantamax, 0))
+        if self.can_dynamax:
+            self.add_item(self._create_button("Dyna", None, self.is_dynamax, "toggle_dynamax", self.toggle_dynamax, 0))
+        # Removed Giga button
         self.add_item(self._create_button("BG", "🌍", self.is_background, "toggle_bg", self.toggle_bg, 0))
 
         # Row 1: Advanced Attributes & Details
@@ -187,7 +189,7 @@ class ListingDraftView(ui.View):
         if self.is_shiny: status_parts.append("✨ **Shiny**")
         if self.is_purified: status_parts.append("🕊️ **Purified**")
         if self.is_dynamax: status_parts.append("**Dyna**")
-        if self.is_gigantamax: status_parts.append("**Giga**")
+        # Removed Giga status
         if self.is_background: status_parts.append("🌍 **BG**")
         if self.is_adventure_effect: status_parts.append("🪄 **Adv**")
         if self.is_mirror: status_parts.append("🪞 **Mirror**")
@@ -251,9 +253,7 @@ class ListingDraftView(ui.View):
         self.is_dynamax = not self.is_dynamax
         await self.update_view(interaction)
 
-    async def toggle_gigantamax(self, interaction: discord.Interaction):
-        self.is_gigantamax = not self.is_gigantamax
-        await self.update_view(interaction)
+    # Removed toggle_gigantamax
 
     async def toggle_bg(self, interaction: discord.Interaction):
         self.is_background = not self.is_background
@@ -314,7 +314,7 @@ class ListingDraftView(ui.View):
                 self.is_shiny,
                 self.is_purified,
                 self.is_dynamax,
-                self.is_gigantamax,
+                False, # is_gigantamax forced to False
                 self.is_background,
                 self.is_adventure_effect,
                 self.is_mirror,

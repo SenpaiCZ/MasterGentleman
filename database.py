@@ -407,10 +407,11 @@ async def get_pokemon_species_by_name(name):
 async def search_pokemon_species(query, limit=25):
     """Search for autocomplete."""
     async with get_db() as db:
-        # Search by name or form
+        # Search by name or form, excluding Shadow variants
         sql = """
             SELECT * FROM pokemon_species
-            WHERE name LIKE ? OR (name || ' ' || form) LIKE ?
+            WHERE (name LIKE ? OR (name || ' ' || form) LIKE ?)
+            AND form NOT LIKE '%Shadow%'
             LIMIT ?
         """
         like_query = f"{query}%"
@@ -423,6 +424,7 @@ async def search_pokemon_species_extended(query, limit=25):
     Query logic:
     - If query matches a type (e.g. "Fire"), return Fire types.
     - Else search by name.
+    - Exclude Shadow variants.
     """
     async with get_db() as db:
         like_query = f"%{query}%"
@@ -431,14 +433,21 @@ async def search_pokemon_species_extended(query, limit=25):
         # We can just do a giant OR
         sql = """
             SELECT * FROM pokemon_species
-            WHERE name LIKE ?
+            WHERE (name LIKE ?
                OR (name || ' ' || form) LIKE ?
                OR type1 LIKE ?
-               OR type2 LIKE ?
+               OR type2 LIKE ?)
+               AND form NOT LIKE '%Shadow%'
             ORDER BY pokedex_num ASC
             LIMIT ?
         """
         async with db.execute(sql, (like_query, like_query, like_query, like_query, limit)) as cursor:
+            return await cursor.fetchall()
+
+async def get_pokemon_variants(pokedex_num):
+    """Get all variants for a specific pokedex number."""
+    async with get_db() as db:
+        async with db.execute("SELECT * FROM pokemon_species WHERE pokedex_num = ?", (pokedex_num,)) as cursor:
             return await cursor.fetchall()
 
 async def get_pokemon_species_by_id(species_id):
