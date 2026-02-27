@@ -25,7 +25,7 @@ async def find_match(new_listing_id):
 
         candidates = await database.find_candidates(
             listing_type=target_type,
-            pokemon_id=new_listing['pokemon_id'],
+            species_id=new_listing['species_id'],
             is_shiny=new_listing['is_shiny'],
             is_purified=new_listing['is_purified'],
             is_dynamax=new_listing['is_dynamax'],

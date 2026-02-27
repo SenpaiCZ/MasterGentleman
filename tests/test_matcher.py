@@ -14,6 +14,7 @@ class TestMatcher(unittest.IsolatedAsyncioTestCase):
         if os.path.exists(database.DB_NAME):
             os.remove(database.DB_NAME)
         await database.init_db()
+        self.pikachu_id = await database.upsert_pokemon_species(25, "Pikachu", "Normal", "Electric")
 
     async def asyncTearDown(self):
         if os.path.exists(database.DB_NAME):
@@ -30,10 +31,10 @@ class TestMatcher(unittest.IsolatedAsyncioTestCase):
         acc2 = await self._create_account(2)
 
         # User A wants Pikachu
-        listing_a = await database.add_listing(user_id=1, account_id=acc1, listing_type='WANT', pokemon_id=25)
+        listing_a = await database.add_listing(user_id=1, account_id=acc1, listing_type='WANT', species_id=self.pikachu_id)
 
         # User B has Pikachu
-        listing_b = await database.add_listing(user_id=2, account_id=acc2, listing_type='HAVE', pokemon_id=25)
+        listing_b = await database.add_listing(user_id=2, account_id=acc2, listing_type='HAVE', species_id=self.pikachu_id)
 
         # Trigger match for listing_b
         trade_id, match = await matcher.find_match(listing_b)
@@ -46,10 +47,10 @@ class TestMatcher(unittest.IsolatedAsyncioTestCase):
         acc1 = await self._create_account(1)
 
         # User A wants Pikachu
-        listing_a = await database.add_listing(user_id=1, account_id=acc1, listing_type='WANT', pokemon_id=25)
+        listing_a = await database.add_listing(user_id=1, account_id=acc1, listing_type='WANT', species_id=self.pikachu_id)
 
         # User A has Pikachu (unlikely but possible listing)
-        listing_b = await database.add_listing(user_id=1, account_id=acc1, listing_type='HAVE', pokemon_id=25)
+        listing_b = await database.add_listing(user_id=1, account_id=acc1, listing_type='HAVE', species_id=self.pikachu_id)
 
         trade_id, match = await matcher.find_match(listing_b)
         self.assertIsNone(trade_id)
@@ -60,16 +61,16 @@ class TestMatcher(unittest.IsolatedAsyncioTestCase):
         acc3 = await self._create_account(3)
 
         # User A wants Shiny Pikachu
-        listing_a = await database.add_listing(user_id=1, account_id=acc1, listing_type='WANT', pokemon_id=25, is_shiny=True)
+        listing_a = await database.add_listing(user_id=1, account_id=acc1, listing_type='WANT', species_id=self.pikachu_id, is_shiny=True)
 
         # User B has Normal Pikachu
-        listing_b = await database.add_listing(user_id=2, account_id=acc2, listing_type='HAVE', pokemon_id=25, is_shiny=False)
+        listing_b = await database.add_listing(user_id=2, account_id=acc2, listing_type='HAVE', species_id=self.pikachu_id, is_shiny=False)
 
         trade_id, match = await matcher.find_match(listing_b)
         self.assertIsNone(trade_id)
 
         # User C has Shiny Pikachu
-        listing_c = await database.add_listing(user_id=3, account_id=acc3, listing_type='HAVE', pokemon_id=25, is_shiny=True)
+        listing_c = await database.add_listing(user_id=3, account_id=acc3, listing_type='HAVE', species_id=self.pikachu_id, is_shiny=True)
 
         trade_id, match = await matcher.find_match(listing_c)
         self.assertIsNotNone(trade_id)

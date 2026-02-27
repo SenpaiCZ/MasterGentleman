@@ -3,7 +3,7 @@ import pytest_asyncio
 import aiosqlite
 import os
 import time
-from database import init_db, upsert_event, get_upcoming_events, get_events_for_notification, mark_event_notified, set_event_config, get_event_config, DB_NAME
+from database import init_db, upsert_event, get_upcoming_events, get_events_for_notification, mark_event_notified, set_guild_config, get_guild_config, DB_NAME
 
 @pytest_asyncio.fixture
 async def setup_db():
@@ -63,12 +63,12 @@ async def test_notifications(setup_db):
 
 @pytest.mark.asyncio
 async def test_config(setup_db):
-    await set_event_config(123, channel_id=456)
-    config = await get_event_config(123)
-    assert config['channel_id'] == 456
-    assert config['role_id'] is None
+    await set_guild_config(123, event_channel_id=456)
+    config = await get_guild_config(123)
+    assert config['event_channel_id'] == 456
+    assert config['event_role_id'] is None
 
-    await set_event_config(123, role_id=789)
-    config = await get_event_config(123)
-    assert config['channel_id'] == 456
-    assert config['role_id'] == 789
+    await set_guild_config(123, event_role_id=789)
+    config = await get_guild_config(123)
+    assert config['event_channel_id'] == 456
+    assert config['event_role_id'] == 789
