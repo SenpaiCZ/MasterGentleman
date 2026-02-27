@@ -66,7 +66,8 @@ async def init_db():
                 await db.execute("ALTER TABLE users ADD COLUMN want_more_friends BOOLEAN DEFAULT 0")
 
             # 2. Pokemon Species (New Table)
-            # Added columns for MSG stats: hp, attack, defense, sp_atk, sp_def, speed
+            # Added columns for MSG stats: hp, attack, defense
+            # Removed columns: sp_atk, sp_def, speed
             # Added columns for tier ranking and buddy distance
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS pokemon_species (
@@ -86,9 +87,6 @@ async def init_db():
                     hp INTEGER DEFAULT 0,
                     attack INTEGER DEFAULT 0,
                     defense INTEGER DEFAULT 0,
-                    sp_atk INTEGER DEFAULT 0,
-                    sp_def INTEGER DEFAULT 0,
-                    speed INTEGER DEFAULT 0,
                     max_cp INTEGER DEFAULT 0,
                     buddy_distance INTEGER DEFAULT 0,
                     tier_data TEXT,
@@ -98,11 +96,62 @@ async def init_db():
                 )
             """)
 
-            # Check for missing columns in pokemon_species and add them if necessary (simple migration)
+            # Check for missing/extra columns in pokemon_species
             async with db.execute("PRAGMA table_info(pokemon_species)") as cursor:
                 columns = [row['name'] for row in await cursor.fetchall()]
 
-            new_columns = ['hp', 'attack', 'defense', 'sp_atk', 'sp_def', 'speed', 'max_cp', 'buddy_distance']
+            # Migration: Remove sp_atk, sp_def, speed if they exist
+            if 'sp_atk' in columns:
+                logger.info("Migrating pokemon_species table to remove MSG stats (sp_atk, sp_def, speed).")
+                await db.execute("""
+                    CREATE TABLE IF NOT EXISTS pokemon_species_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        pokedex_num INTEGER NOT NULL,
+                        name TEXT NOT NULL,
+                        form TEXT DEFAULT 'Normal',
+                        type1 TEXT,
+                        type2 TEXT,
+                        image_url TEXT,
+                        shiny_image_url TEXT,
+                        can_dynamax BOOLEAN DEFAULT 0,
+                        can_gigantamax BOOLEAN DEFAULT 0,
+                        can_mega BOOLEAN DEFAULT 0,
+                        is_legendary BOOLEAN DEFAULT 0,
+                        is_mythical BOOLEAN DEFAULT 0,
+                        hp INTEGER DEFAULT 0,
+                        attack INTEGER DEFAULT 0,
+                        defense INTEGER DEFAULT 0,
+                        max_cp INTEGER DEFAULT 0,
+                        buddy_distance INTEGER DEFAULT 0,
+                        tier_data TEXT,
+                        best_moveset TEXT,
+                        costumes TEXT,
+                        UNIQUE(pokedex_num, form)
+                    )
+                """)
+                # Copy data
+                # We select explicitly the columns we want to keep
+                await db.execute("""
+                    INSERT INTO pokemon_species_new (
+                        id, pokedex_num, name, form, type1, type2, image_url, shiny_image_url,
+                        can_dynamax, can_gigantamax, can_mega, is_legendary, is_mythical,
+                        hp, attack, defense, max_cp, buddy_distance, tier_data, best_moveset, costumes
+                    )
+                    SELECT
+                        id, pokedex_num, name, form, type1, type2, image_url, shiny_image_url,
+                        can_dynamax, can_gigantamax, can_mega, is_legendary, is_mythical,
+                        hp, attack, defense, max_cp, buddy_distance, tier_data, best_moveset, costumes
+                    FROM pokemon_species
+                """)
+                await db.execute("DROP TABLE pokemon_species")
+                await db.execute("ALTER TABLE pokemon_species_new RENAME TO pokemon_species")
+                logger.info("Migration complete.")
+
+            # Simple migration for adding missing columns (if any, for future proofing or missing ones)
+            async with db.execute("PRAGMA table_info(pokemon_species)") as cursor:
+                columns = [row['name'] for row in await cursor.fetchall()]
+
+            new_columns = ['hp', 'attack', 'defense', 'max_cp', 'buddy_distance']
             for col in new_columns:
                 if col not in columns:
                     logger.info(f"Adding missing column {col} to pokemon_species table.")
@@ -305,7 +354,7 @@ async def get_users_wanting_friends(limit=25):
 
 async def upsert_pokemon_species(pokedex_num, name, form, type1, type2=None, image_url=None, shiny_image_url=None,
                                  can_dynamax=False, can_gigantamax=False, can_mega=False,
-                                 hp=0, attack=0, defense=0, sp_atk=0, sp_def=0, speed=0, max_cp=0,
+                                 hp=0, attack=0, defense=0, max_cp=0,
                                  buddy_distance=0, tier_data=None, best_moveset=None, costumes=None):
     """Inserts or updates a pokemon species."""
     async with get_db() as db:
@@ -318,10 +367,10 @@ async def upsert_pokemon_species(pokedex_num, name, form, type1, type2=None, ima
             await db.execute("""
                 UPDATE pokemon_species
                 SET name=?, type1=?, type2=?, image_url=?, shiny_image_url=?, can_dynamax=?, can_gigantamax=?, can_mega=?,
-                    hp=?, attack=?, defense=?, sp_atk=?, sp_def=?, speed=?, max_cp=?, buddy_distance=?, tier_data=?, best_moveset=?, costumes=?
+                    hp=?, attack=?, defense=?, max_cp=?, buddy_distance=?, tier_data=?, best_moveset=?, costumes=?
                 WHERE id=?
             """, (name, type1, type2, image_url, shiny_image_url, can_dynamax, can_gigantamax, can_mega,
-                  hp, attack, defense, sp_atk, sp_def, speed, max_cp, buddy_distance, tier_data, best_moveset, costumes, row['id']))
+                  hp, attack, defense, max_cp, buddy_distance, tier_data, best_moveset, costumes, row['id']))
             await db.commit()
             return row['id']
         else:
@@ -330,12 +379,12 @@ async def upsert_pokemon_species(pokedex_num, name, form, type1, type2=None, ima
                 INSERT INTO pokemon_species (
                     pokedex_num, name, form, type1, type2, image_url, shiny_image_url,
                     can_dynamax, can_gigantamax, can_mega,
-                    hp, attack, defense, sp_atk, sp_def, speed, max_cp, buddy_distance, tier_data, best_moveset, costumes
+                    hp, attack, defense, max_cp, buddy_distance, tier_data, best_moveset, costumes
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (pokedex_num, name, form, type1, type2, image_url, shiny_image_url,
                   can_dynamax, can_gigantamax, can_mega,
-                  hp, attack, defense, sp_atk, sp_def, speed, max_cp, buddy_distance, tier_data, best_moveset, costumes))
+                  hp, attack, defense, max_cp, buddy_distance, tier_data, best_moveset, costumes))
             await db.commit()
             return cursor.lastrowid
 
