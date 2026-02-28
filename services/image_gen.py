@@ -104,16 +104,6 @@ class ImageGenerator:
                 logger.error(f"Error opening image {filepath}: {e}")
         return None
 
-    def _draw_star(self, draw, xy, size, fill):
-        """Draws a 5-pointed star."""
-        x, y = xy
-        points = []
-        for i in range(10):
-            angle = i * 36 * 3.14159 / 180
-            r = size if i % 2 == 0 else size / 2
-            points.append((x + r * math.sin(angle), y - r * math.cos(angle)))
-        draw.polygon(points, fill=fill)
-
     def _draw_badge(self, draw, text, center_xy, bg_color, text_color, font):
         """Draws a small pill/badge with text."""
         x, y = center_xy
@@ -242,8 +232,11 @@ class ImageGenerator:
             is_purified = item['is_purified']
             is_dynamax = item.get('is_dynamax', False)
             is_gigantamax = item.get('is_gigantamax', False)
+            if "(Gigantamax)" in pokemon_form:
+                is_gigantamax = True
             is_background = item.get('is_background', False)
             is_adventure_effect = item.get('is_adventure_effect', False)
+            is_mirror = item.get('is_mirror', False)
 
             sprite = self._get_sprite_sync(pokemon_id, pokemon_form, is_shiny)
             if sprite:
@@ -282,33 +275,33 @@ class ImageGenerator:
 
             # --- Status Indicators ---
 
-            # Shiny: Top Right
-            if is_shiny:
-                cx = x + CELL_W - 15
-                cy = y + 15
-                self._draw_star(draw, (cx, cy), 8, fill=(255, 215, 0))
-
-            # Purified: Top Left
-            if is_purified:
-                cx = x + 15
-                cy = y + 15
-                draw.ellipse([(cx-6, cy-6), (cx+6, cy+6)], fill=(200, 200, 255))
-                draw.text((cx-3, cy-5), "P", font=font_small, fill=(0, 0, 0))
-
-            # Dynamax / Gigantamax: Top Center
-            # Priority to Gigantamax if both set (usually Gmax implies Dmax)
+            # Giga: Top Left
             if is_gigantamax:
-                self._draw_badge(draw, "Giga", (x + CELL_W/2, y + 15), (139, 0, 0), (255, 255, 255), font_badge)
-            elif is_dynamax:
+                self._draw_badge(draw, "Giga", (x + 25, y + 15), (0, 0, 0), (255, 255, 255), font_badge)
+
+            # Dyna: Top Center
+            if is_dynamax and not is_gigantamax:
                 self._draw_badge(draw, "Dyna", (x + CELL_W/2, y + 15), (255, 20, 147), (255, 255, 255), font_badge)
 
-            # Background: Bottom Right (above text)
-            if is_background:
-                self._draw_badge(draw, "BG", (x + CELL_W - 20, y + 95), (0, 100, 0), (255, 255, 255), font_badge)
+            # Shiny: Top Right
+            if is_shiny:
+                self._draw_badge(draw, "Shiny", (x + CELL_W - 25, y + 15), (255, 215, 0), (0, 0, 0), font_badge)
 
-            # Adventure Effect: Bottom Left (above text)
+            # Mirror: Middle Right
+            if is_mirror:
+                self._draw_badge(draw, "Mirro", (x + CELL_W - 25, y + 55), (192, 192, 192), (0, 0, 0), font_badge)
+
+            # Purified: Bottom Left
+            if is_purified:
+                self._draw_badge(draw, "Purif", (x + 25, y + 95), (255, 255, 255), (0, 0, 0), font_badge)
+
+            # Background: Bottom Center
+            if is_background:
+                self._draw_badge(draw, "Backg", (x + CELL_W/2, y + 95), (0, 100, 0), (255, 255, 255), font_badge)
+
+            # Adventure Effect: Bottom Right
             if is_adventure_effect:
-                self._draw_badge(draw, "Adv", (x + 20, y + 95), (75, 0, 130), (255, 255, 255), font_badge)
+                self._draw_badge(draw, "Adven", (x + CELL_W - 25, y + 95), (173, 216, 230), (0, 0, 0), font_badge)
 
         # --- Footer ---
         footer_text = "senpai.cz/pogo"
