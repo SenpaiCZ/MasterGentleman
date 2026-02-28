@@ -92,9 +92,23 @@ async def scrape_leekduck():
                 if image_url and image_url.startswith('/'):
                     image_url = "https://leekduck.com" + image_url
 
+                # Type and Time Text
+                heading_span = link_elem.select_one('.event-tag-badge')
+                event_type = heading_span.text.strip() if heading_span else "Event"
+
+                time_elem = link_elem.select_one('p')
+                time_text = time_elem.text.strip() if time_elem else ""
+
                 # Parse times
                 start_ts = parse_iso_time(start_iso, is_local)
                 end_ts = parse_iso_time(end_iso, is_local)
+
+                # Fix "Calculating..." time string by using Discord timestamp
+                if "Calculating..." in time_text and start_ts:
+                    try:
+                        time_text = f"<t:{int(start_ts)}:f>"
+                    except Exception as e:
+                        logger.error(f"Error calculating timestamp for {name}: {e}")
 
                 if start_ts:
                     events.append({
@@ -102,7 +116,9 @@ async def scrape_leekduck():
                         'link': link_href,
                         'image_url': image_url,
                         'start_time': int(start_ts),
-                        'end_time': int(end_ts) if end_ts else None
+                        'end_time': int(end_ts) if end_ts else None,
+                        'type': event_type,
+                        'time_text': time_text
                     })
 
             except Exception as e:
