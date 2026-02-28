@@ -4,6 +4,9 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import database
 
 class TestDatabaseSchema(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await database.init_db()
+
     async def test_schema_columns(self):
         """Verify that new columns exist in the database schema."""
         async with database.get_db() as db:

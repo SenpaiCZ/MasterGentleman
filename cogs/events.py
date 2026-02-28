@@ -18,11 +18,13 @@ class Events(commands.Cog):
         self.scrape_task.start()
         self.notification_task.start()
         self.weekly_summary_task.start()
+        self.daily_summary_task.start()
 
     def cog_unload(self):
         self.scrape_task.cancel()
         self.notification_task.cancel()
         self.weekly_summary_task.cancel()
+        self.daily_summary_task.cancel()
 
     # --- Commands ---
 
@@ -105,35 +107,47 @@ class Events(commands.Cog):
             await interaction.followup.send("❌ Žádné eventy pro dnešní den.", ephemeral=True)
             return
 
-        embed = self._create_summary_embed(upcoming_events, "📅 Dnešní Eventy")
+        embed = self._create_daily_summary_embed(upcoming_events, "📅 Dnešní Eventy")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     def _create_summary_embed(self, events, title):
         embed = discord.Embed(
             title=title,
-            color=discord.Color.blue()
+            color=discord.Color.teal()
         )
 
-        events_by_day = {}
-        for e in events:
-            dt = datetime.datetime.fromtimestamp(e['start_time'], datetime.timezone.utc).astimezone(TZ_PRAGUE)
-
-            day_name_en = dt.strftime("%A")
+        description = ""
+        for ev in events:
+            start_dt = datetime.datetime.fromtimestamp(ev['start_time'], datetime.timezone.utc).astimezone(TZ_PRAGUE)
+            day_name_en = start_dt.strftime("%A")
             day_name_cz = self.translate_day(day_name_en)
-            day_key = f"{day_name_cz} {dt.strftime('%d.%m.')}"
 
-            if day_key not in events_by_day:
-                events_by_day[day_key] = []
-            events_by_day[day_key].append(e)
+            time_text = ev.get('time_text') or "TBA"
+            link = ev.get('link') or ""
+            name = ev.get('name') or "Neznámý event"
 
-        for day, evs in events_by_day.items():
-            lines = []
-            for e in evs:
-                time_str = f"<t:{int(e['start_time'])}:t>" # Short time (12:00)
-                link_md = f"[{e['name']}]({e['link']})" if e['link'] else e['name']
-                lines.append(f"• {time_str} {link_md}")
+            description += f"**{day_name_cz}**: [{name}]({link}) ({time_text} - <t:{int(ev['start_time'])}:R>)\n"
 
-            embed.add_field(name=day, value="\n".join(lines), inline=False)
+        embed.description = description
+        return embed
+
+    def _create_daily_summary_embed(self, events, title):
+        embed = discord.Embed(
+            title=title,
+            color=discord.Color.green()
+        )
+
+        for ev in events:
+            time_text = ev.get('time_text') or "TBA"
+            event_type = ev.get('type') or "Event"
+            link = ev.get('link') or ""
+            name = ev.get('name') or "Neznámý event"
+
+            embed.add_field(
+                name=name,
+                value=f"**Typ:** {event_type}\n**Čas:** {time_text} (<t:{int(ev['start_time'])}:R>)\n[Odkaz]({link})",
+                inline=False
+            )
 
         return embed
 
@@ -150,7 +164,7 @@ class Events(commands.Cog):
         for e in events:
             # Upsert
             await database.upsert_event(
-                e['name'], e['link'], e['image_url'], e['start_time'], e['end_time']
+                e['name'], e['link'], e['image_url'], e['start_time'], e['end_time'], e.get('type', 'Event'), e.get('time_text', '')
             )
             count += 1
         logger.info(f"Database updated with {count} events.")
@@ -189,21 +203,21 @@ class Events(commands.Cog):
             title_prefix = "⏰ Začíná za"
 
             discord_ts = f"<t:{int(event['start_time'])}:R>"
+            time_text = event.get('time_text') or "TBA"
+            event_type = event.get('type') or "Event"
 
             embed = discord.Embed(
-                title=f"{event['name']}",
-                description=f"{title_prefix} {time_str}!\n\n**Začátek:** {discord_ts}",
+                title=f"⏰ Upozornění na událost: {event['name']}",
+                description=f"**Začátek:** {discord_ts}\n**Čas:** {time_text}\n**Typ:** {event_type}",
                 color=discord.Color.orange() if notif_type == '2h' else discord.Color.red(),
-                timestamp=datetime.datetime.now()
+                url=event.get('link') or ""
             )
 
             if event['image_url']:
-                embed.set_image(url=event['image_url'])
+                embed.set_thumbnail(url=event['image_url'])
 
-            if event['link']:
-                embed.url = event['link']
-
-            content = f"{role_mention} **Upozornění na Event!**"
+            msg_suffix = "začíná za 2 hodiny!" if notif_type == '2h' else "začíná za 5 minut!"
+            content = f"{role_mention} Událost {msg_suffix}"
 
             try:
                 await channel.send(content=content, embed=embed)
@@ -259,6 +273,46 @@ class Events(commands.Cog):
             except Exception as e:
                 logger.error(f"Failed to send summary to guild {guild.id}: {e}")
 
+    @tasks.loop(time=datetime.time(hour=7, minute=0, tzinfo=TZ_PRAGUE))
+    async def daily_summary_task(self):
+        logger.info("Running daily summary task.")
+
+        now = datetime.datetime.now(TZ_PRAGUE)
+        start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_ts = start_dt.timestamp()
+
+        end_dt = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        end_ts = end_dt.timestamp()
+
+        # We will reuse the get_events_for_notification logic or just query direct
+        events = await database.get_events_for_notification(start_ts, end_ts, 'morning')
+        if not events:
+            logger.info("No upcoming events for today's morning summary.")
+            return
+
+        embed = self._create_daily_summary_embed(events, "📅 Dnešní Eventy")
+
+        for guild in self.bot.guilds:
+            config = await database.get_guild_config(guild.id)
+            if not config or not config['event_channel_id']:
+                continue
+
+            channel = guild.get_channel(config['event_channel_id'])
+            if not channel:
+                continue
+
+            role = guild.get_role(config['event_role_id']) if config['event_role_id'] else None
+            role_mention = role.mention if role else ""
+
+            try:
+                await channel.send(content=f"{role_mention} **Ranní přehled událostí!**", embed=embed)
+            except Exception as e:
+                logger.error(f"Failed to send morning summary to guild {guild.id}: {e}")
+
+        # Mark as notified after sending
+        for ev in events:
+            await database.mark_event_notified(ev['id'], 'morning')
+
     def translate_day(self, en_day):
         days = {
             "Monday": "Pondělí", "Tuesday": "Úterý", "Wednesday": "Středa",
@@ -272,6 +326,10 @@ class Events(commands.Cog):
         await self.bot.wait_until_ready()
         logger.info("Running initial scrape on boot.")
         await self._run_scrape()
+
+    @daily_summary_task.before_loop
+    async def before_daily(self):
+        await self.bot.wait_until_ready()
 
     @notification_task.before_loop
     async def before_notif(self):

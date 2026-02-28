@@ -232,6 +232,9 @@ async def init_db():
                     image_url TEXT,
                     start_time INTEGER NOT NULL,
                     end_time INTEGER,
+                    type TEXT DEFAULT 'Event',
+                    time_text TEXT,
+                    notified_morning BOOLEAN DEFAULT 0,
                     notified_2h BOOLEAN DEFAULT 0,
                     notified_5m BOOLEAN DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -239,6 +242,20 @@ async def init_db():
                 )
             """)
             await db.execute("CREATE INDEX IF NOT EXISTS idx_start_time ON events (start_time)")
+
+            # Check for missing columns in events
+            async with db.execute("PRAGMA table_info(events)") as cursor:
+                columns = [row['name'] for row in await cursor.fetchall()]
+
+            new_event_columns = {
+                'type': "TEXT DEFAULT 'Event'",
+                'time_text': "TEXT",
+                'notified_morning': "BOOLEAN DEFAULT 0"
+            }
+            for col, col_type in new_event_columns.items():
+                if col not in columns:
+                    logger.info(f"Adding missing column {col} to events table.")
+                    await db.execute(f"ALTER TABLE events ADD COLUMN {col} {col_type}")
 
             # 6. Guild Config
             await db.execute("""
@@ -643,23 +660,23 @@ async def find_candidates(listing_type, species_id,
 
 # --- Events ---
 
-async def upsert_event(name, link, image_url, start_time, end_time):
+async def upsert_event(name, link, image_url, start_time, end_time, type="Event", time_text=None):
     async with get_db() as db:
         async with db.execute("SELECT id FROM events WHERE link = ?", (link,)) as cursor:
             row = await cursor.fetchone()
             if row:
                 await db.execute("""
                     UPDATE events
-                    SET name = ?, image_url = ?, start_time = ?, end_time = ?
+                    SET name = ?, image_url = ?, start_time = ?, end_time = ?, type = ?, time_text = ?
                     WHERE id = ?
-                """, (name, image_url, start_time, end_time, row['id']))
+                """, (name, image_url, start_time, end_time, type, time_text, row['id']))
                 await db.commit()
                 return row['id']
             else:
                 cursor = await db.execute("""
-                    INSERT INTO events (name, link, image_url, start_time, end_time)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (name, link, image_url, start_time, end_time))
+                    INSERT INTO events (name, link, image_url, start_time, end_time, type, time_text)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (name, link, image_url, start_time, end_time, type, time_text))
                 await db.commit()
                 return cursor.lastrowid
 

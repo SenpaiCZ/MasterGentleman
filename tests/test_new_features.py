@@ -4,6 +4,9 @@ from unittest.mock import MagicMock, patch
 import database
 
 class TestDatabaseLogic(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await database.init_db()
+
     async def test_update_listing_status(self):
         """Verify update_listing_status function works (was missing before)."""
         # Create dummy user & listing
