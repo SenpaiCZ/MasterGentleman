@@ -132,9 +132,14 @@ class ImageGenerator:
     def _generate_card_sync(self, listings, title, user_name, team_color_rgb, friend_code):
         """Sync implementation of image generation."""
         num_items = len(listings)
-        cols = math.ceil(math.sqrt(num_items))
-        if cols < 3: cols = 3
-        if cols > 6: cols = 6
+        if num_items <= 9:
+            cols = 3
+        elif num_items <= 16:
+            cols = 4
+        elif num_items <= 25:
+            cols = 5
+        else:
+            cols = 6
 
         rows = math.ceil(num_items / cols)
 
