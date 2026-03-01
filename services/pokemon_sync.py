@@ -82,6 +82,16 @@ async def fetch_url(session, url):
         logger.error(f"Error fetching {url}: {e}")
         return None
 
+# A list of common suffixes for variants.
+COMMON_VARIANTS = [
+    "Alola", "Galar", "Hisui", "Paldea",
+    "Mega", "Mega_X", "Mega_Y",
+    "Primal", "Armored", "Origin", "Therian", "Incarnate",
+    "Shadow", "Purified",
+    "Alola_Shadow", "Galar_Shadow", "Hisui_Shadow", "Paldea_Shadow",
+    "Armored_Shadow"
+]
+
 async def process_pokemon_family(db, session, pokedex_num):
     """
     Fetches the main pokemon page, parses base form, and discovers/fetches other forms.
@@ -116,16 +126,16 @@ async def process_pokemon_family(db, session, pokedex_num):
     print(f"Synced #{pokedex_num} {base_name} (Normal)")
 
     # --- 2. Discover Forms ---
-    processed_urls = {url}
+    # db.pokemongohub.net no longer explicitly embeds form links in the HTML
+    # We will test known common variants to see if they exist (returns 200)
 
-    links = soup.find_all('a', href=True)
+    # Also parse links just in case some are embedded
+    processed_urls = {url}
     form_links = set()
 
+    links = soup.find_all('a', href=True)
     for link in links:
         href = link['href']
-        # Check if it matches /pokemon/{id}-... or https://db.pokemongohub.net/pokemon/{id}-...
-
-        # Normalize href to full URL for checking
         if href.startswith('/'):
             full_url = f"{BASE_URL}{href}"
         elif href.startswith(BASE_URL):
@@ -133,17 +143,30 @@ async def process_pokemon_family(db, session, pokedex_num):
         else:
             continue
 
-        # Check against pattern
         expected_prefix = f"{BASE_URL}/pokemon/{pokedex_num}-"
+        if full_url.startswith(expected_prefix) and full_url not in processed_urls:
+            form_links.add(full_url)
 
-        if full_url.startswith(expected_prefix):
-            if full_url not in processed_urls:
-                form_links.add(full_url)
+    # Add common variants
+    for variant in COMMON_VARIANTS:
+        form_url = f"{BASE_URL}/pokemon/{pokedex_num}-{variant}"
+        if form_url not in processed_urls:
+            form_links.add(form_url)
 
-    # Process discovered forms
-    for form_url in form_links:
-        processed_urls.add(form_url)
-        await process_single_form(db, session, pokedex_num, form_url, base_name)
+    # Check and process discovered forms
+    # We do this concurrently to save time, as most won't exist
+    async def check_and_process(form_url):
+        try:
+            # First just check if the form page exists to avoid parsing errors
+            async with session.head(form_url) as response:
+                if response.status == 200:
+                    await process_single_form(db, session, pokedex_num, form_url, base_name)
+        except Exception as e:
+            logger.error(f"Error processing form {form_url}: {e}")
+
+    tasks = [check_and_process(url) for url in form_links]
+    if tasks:
+        await asyncio.gather(*tasks)
 
 async def process_single_form(db, session, pokedex_num, url, base_name):
     html = await fetch_url(session, url)
