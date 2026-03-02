@@ -26,9 +26,10 @@ async def scrape_pokemon_data(pokedex_num=None, progress_callback=None):
     print("Starting Pokemon GO data sync...")
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://db.pokemongohub.net/",
     }
 
     async with database.get_db() as db:
@@ -98,11 +99,19 @@ async def process_pokemon_family(db, session, pokedex_num):
     """
     url = f"{BASE_URL}/pokemon/{pokedex_num}"
     html = await fetch_url(session, url)
+
+    # We must allow cleanup of phantom variants even if the base form page fetch fails
+    # (e.g., if there's a temporary network error or the page actually 404s).
+    # But wait, if it's a temporary error, we might delete all forms because synced_forms will be empty!
+    # A safer approach: Only do phantom cleanup if we successfully fetched the base form.
+    # So if `not html`, we should indeed return, as we did not successfully sync this family.
+
     if not html:
         print(f"Skipping #{pokedex_num} (Failed to fetch or not found)")
         return
 
     soup = BeautifulSoup(html, 'html.parser')
+    synced_forms = set()
 
     # --- 1. Parse Base Form ---
     base_name = get_text(soup, 'h1')
@@ -126,6 +135,7 @@ async def process_pokemon_family(db, session, pokedex_num):
         print(f"Skipping #{pokedex_num} {base_name} (Normal) - Invalid stats")
     else:
         await upsert_species(db, pokedex_num, base_name, "Normal", types, stats, image_url, shiny_image_url, tier_data, best_moveset, costumes, can_dynamax)
+        synced_forms.add("Normal")
         print(f"Synced #{pokedex_num} {base_name} (Normal)")
 
     # --- 2. Discover Forms ---
@@ -163,13 +173,32 @@ async def process_pokemon_family(db, session, pokedex_num):
             # First just check if the form page exists to avoid parsing errors
             async with session.head(form_url) as response:
                 if response.status == 200:
-                    await process_single_form(db, session, pokedex_num, form_url, base_name)
+                    return await process_single_form(db, session, pokedex_num, form_url, base_name)
         except Exception as e:
             logger.error(f"Error processing form {form_url}: {e}")
+        return None
 
     tasks = [check_and_process(url) for url in form_links]
     if tasks:
-        await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks)
+        for r in results:
+            if r:
+                synced_forms.add(r)
+
+    # --- 3. Clean up Phantom Variants ---
+    # Fetch all variants currently in DB for this pokedex_num
+    db_variants = await database.get_pokemon_variants(pokedex_num)
+    for variant in db_variants:
+        form = variant['form']
+        if form not in synced_forms:
+            # Check if stats are 0
+            if variant['attack'] == 0 and variant['defense'] == 0 and variant['hp'] == 0:
+                print(f"  -> Attempting to delete phantom variant #{pokedex_num} {base_name} ({form}) with 0 stats")
+                try:
+                    await database.delete_pokemon_species(variant['id'])
+                    print(f"  -> Successfully deleted phantom variant #{pokedex_num} {base_name} ({form})")
+                except Exception as e:
+                    print(f"  -> Could not delete #{pokedex_num} {base_name} ({form}) (Might be in use by a listing): {e}")
 
 async def process_single_form(db, session, pokedex_num, url, base_name):
     html = await fetch_url(session, url)
@@ -216,11 +245,12 @@ async def process_single_form(db, session, pokedex_num, url, base_name):
 
     if stats.get('attack', 0) == 0 and stats.get('defense', 0) == 0 and stats.get('hp', 0) == 0:
         print(f"  -> Skipping #{pokedex_num} {base_name} ({form_name}) - Invalid stats")
-        return
+        return None
 
     # Upsert
     await upsert_species(db, pokedex_num, base_name, form_name, types, stats, image_url, shiny_image_url, tier_data, best_moveset, costumes, can_dynamax)
     print(f"  -> Synced #{pokedex_num} {base_name} ({form_name})")
+    return form_name
 
 
 def parse_stats(soup):
