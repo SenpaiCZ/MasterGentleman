@@ -122,8 +122,11 @@ async def process_pokemon_family(db, session, pokedex_num):
     can_dynamax = parse_dynamax_status(soup, base_name)
 
     # Upsert Base Form
-    await upsert_species(db, pokedex_num, base_name, "Normal", types, stats, image_url, shiny_image_url, tier_data, best_moveset, costumes, can_dynamax)
-    print(f"Synced #{pokedex_num} {base_name} (Normal)")
+    if stats.get('attack', 0) == 0 and stats.get('defense', 0) == 0 and stats.get('hp', 0) == 0:
+        print(f"Skipping #{pokedex_num} {base_name} (Normal) - Invalid stats")
+    else:
+        await upsert_species(db, pokedex_num, base_name, "Normal", types, stats, image_url, shiny_image_url, tier_data, best_moveset, costumes, can_dynamax)
+        print(f"Synced #{pokedex_num} {base_name} (Normal)")
 
     # --- 2. Discover Forms ---
     # db.pokemongohub.net no longer explicitly embeds form links in the HTML
@@ -210,6 +213,10 @@ async def process_single_form(db, session, pokedex_num, url, base_name):
     # The FAQ check logic is generic based on the soup of the current page.
     full_name = f"{form_name} {base_name}" if form_name != "Normal" else base_name
     can_dynamax = parse_dynamax_status(soup, full_name)
+
+    if stats.get('attack', 0) == 0 and stats.get('defense', 0) == 0 and stats.get('hp', 0) == 0:
+        print(f"  -> Skipping #{pokedex_num} {base_name} ({form_name}) - Invalid stats")
+        return
 
     # Upsert
     await upsert_species(db, pokedex_num, base_name, form_name, types, stats, image_url, shiny_image_url, tier_data, best_moveset, costumes, can_dynamax)
