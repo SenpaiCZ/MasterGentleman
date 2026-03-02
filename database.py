@@ -480,6 +480,12 @@ async def get_pokemon_species_by_id(species_id):
         async with db.execute("SELECT * FROM pokemon_species WHERE id = ?", (species_id,)) as cursor:
             return await cursor.fetchone()
 
+async def delete_pokemon_species(species_id):
+    """Deletes a pokemon species from the database by ID."""
+    async with get_db() as db:
+        await db.execute("DELETE FROM pokemon_species WHERE id = ?", (species_id,))
+        await db.commit()
+
 # --- Listings ---
 
 async def add_listing(user_id, account_id, listing_type, species_id,
