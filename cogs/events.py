@@ -15,6 +15,8 @@ TZ_PRAGUE = pytz.timezone('Europe/Prague')
 class Events(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.last_weekly_run = None
+        self.last_daily_run = None
         self.scrape_task.start()
         self.notification_task.start()
         self.weekly_summary_task.start()
@@ -193,8 +195,8 @@ class Events(commands.Cog):
             await self._send_notification(event, '2h')
             await database.mark_event_notified(event['id'], '2h')
 
-        # 5m Warning: [now + 1min, now + 10min]
-        events_5m = await database.get_events_for_notification(now_ts + 1*60, now_ts + 10*60, '5m')
+        # 5m Warning: [now + 4min, now + 6min]
+        events_5m = await database.get_events_for_notification(now_ts + 4*60, now_ts + 6*60, '5m')
         for event in events_5m:
             await self._send_notification(event, '5m')
             await database.mark_event_notified(event['id'], '5m')
@@ -237,12 +239,18 @@ class Events(commands.Cog):
             except Exception as e:
                 logger.error(f"Failed to send notification to guild {guild.id}: {e}")
 
-    @tasks.loop(time=datetime.time(hour=20, minute=0, tzinfo=TZ_PRAGUE))
+    @tasks.loop(minutes=1)
     async def weekly_summary_task(self):
-        # Only run on Sunday
         now = datetime.datetime.now(TZ_PRAGUE)
-        if now.weekday() != 6: # Sunday is 6
+        # Check if it is Sunday 20:00
+        if now.weekday() != 6 or now.hour != 20 or now.minute != 0:
             return
+
+        # Ensure we only run once per minute
+        if self.last_weekly_run and self.last_weekly_run == now.date():
+            return
+
+        self.last_weekly_run = now.date()
 
         logger.info("Running weekly summary task.")
 
@@ -286,8 +294,18 @@ class Events(commands.Cog):
             except Exception as e:
                 logger.error(f"Failed to send summary to guild {guild.id}: {e}")
 
-    @tasks.loop(time=datetime.time(hour=7, minute=0, tzinfo=TZ_PRAGUE))
+    @tasks.loop(minutes=1)
     async def daily_summary_task(self):
+        now = datetime.datetime.now(TZ_PRAGUE)
+        if now.hour != 7 or now.minute != 0:
+            return
+
+        # Ensure we only run once per day
+        if self.last_daily_run and self.last_daily_run == now.date():
+            return
+
+        self.last_daily_run = now.date()
+
         logger.info("Running daily summary task.")
 
         now = datetime.datetime.now(TZ_PRAGUE)
