@@ -98,11 +98,39 @@ class Admin(commands.Cog):
             if ctx.author.id != app_info.owner.id:
                 return await ctx.send("You do not have permission to use this command.")
 
-        msg = await ctx.send("Updating bot from repository...")
+        msg = await ctx.send("Starting update process...")
         logger.info("Starting bot update...")
 
+        db_file = database.DB_NAME
+        backup_file = f"{db_file}.bak"
+        owner = None
+
         try:
-            # git pull
+            # 1. Send backup to owner
+            app_info = await self.bot.application_info()
+            owner = app_info.owner
+
+            if os.path.exists(db_file):
+                try:
+                    await owner.send(
+                        content="Automatic backup before updatebot.",
+                        file=discord.File(db_file)
+                    )
+                    await msg.edit(content="Backup sent to owner's DM. Creating local backup...")
+                    logger.info(f"Pre-update database backup sent to {owner}.")
+                except discord.Forbidden:
+                    await msg.edit(content="Could not send DM to owner for backup, but continuing update...")
+                    logger.error("Could not send DM to owner for pre-update backup.")
+
+                # 2. Create local backup for rollback
+                import shutil
+                shutil.copy2(db_file, backup_file)
+                logger.info(f"Local backup created at {backup_file}")
+            else:
+                await msg.edit(content="No database file found to backup. Continuing update...")
+
+            # 3. git pull
+            await msg.edit(content="Updating bot from repository...")
             process = await asyncio.create_subprocess_shell(
                 "git pull",
                 stdout=asyncio.subprocess.PIPE,
@@ -117,7 +145,7 @@ class Admin(commands.Cog):
             logger.info(f"Git pull successful: {stdout.decode()}")
             await msg.edit(content=f"Git pull successful. Installing dependencies...")
 
-            # pip install
+            # 4. pip install
             process = await asyncio.create_subprocess_shell(
                 f'"{sys.executable}" -m pip install -r requirements.txt',
                 stdout=asyncio.subprocess.PIPE,
@@ -132,12 +160,79 @@ class Admin(commands.Cog):
             logger.info("Dependencies installed. Restarting...")
             await msg.edit(content="Update complete. Restarting...")
 
-            # Restart
+            # 5. Restart
             os.execv(sys.executable, ['python'] + sys.argv)
 
         except Exception as e:
             logger.error(f"Update failed: {e}")
             await msg.edit(content=f"An error occurred: {e}")
+
+    @commands.command()
+    async def rollback(self, ctx):
+        """Rolls back the bot to the previous commit and restores the database backup."""
+        # Check if user is owner
+        is_owner = await self.bot.is_owner(ctx.author)
+        if not is_owner:
+            app_info = await self.bot.application_info()
+            if ctx.author.id != app_info.owner.id:
+                return await ctx.send("You do not have permission to use this command.")
+
+        msg = await ctx.send("Starting rollback process...")
+        logger.info("Starting bot rollback...")
+
+        try:
+            # 1. Revert Git to previous state
+            await msg.edit(content="Reverting git to previous commit...")
+            process = await asyncio.create_subprocess_shell(
+                "git reset --hard HEAD@{1}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+
+            if process.returncode != 0:
+                logger.error(f"Git rollback failed: {stderr.decode()}")
+                return await msg.edit(content=f"Git rollback failed:\n```{stderr.decode()}```")
+
+            logger.info(f"Git rollback successful: {stdout.decode()}")
+            await msg.edit(content="Git rollback successful. Restoring database...")
+
+            # 2. Restore database from backup
+            db_file = database.DB_NAME
+            backup_file = f"{db_file}.bak"
+            import shutil
+
+            if os.path.exists(backup_file):
+                # We could move it, but copy is safer if they want to rollback again, though HEAD@{1} logic might get messy.
+                # Actually, simple move is fine for a rollback. Let's just copy so the backup remains.
+                shutil.copy2(backup_file, db_file)
+                logger.info(f"Database restored from {backup_file}")
+                await msg.edit(content="Database restored from backup. Installing dependencies...")
+            else:
+                logger.warning(f"No local backup found at {backup_file}.")
+                await msg.edit(content="Warning: No local database backup found to restore. Installing dependencies...")
+
+            # 3. Re-install dependencies
+            process = await asyncio.create_subprocess_shell(
+                f'"{sys.executable}" -m pip install -r requirements.txt',
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+
+            if process.returncode != 0:
+                logger.error(f"Dependency install failed: {stderr.decode()}")
+                return await msg.edit(content=f"Dependency install failed:\n```{stderr.decode()}```")
+
+            logger.info("Dependencies installed. Restarting...")
+            await msg.edit(content="Rollback complete. Restarting...")
+
+            # 4. Restart
+            os.execv(sys.executable, ['python'] + sys.argv)
+
+        except Exception as e:
+            logger.error(f"Rollback failed: {e}")
+            await msg.edit(content=f"An error occurred during rollback: {e}")
 
     @commands.command()
     async def backup(self, ctx):
