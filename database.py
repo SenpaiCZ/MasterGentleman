@@ -704,6 +704,27 @@ async def mark_event_notified(event_id, notification_type):
         await db.execute(f"UPDATE events SET {col_name} = 1 WHERE id = ?", (event_id,))
         await db.commit()
 
+async def delete_obsolete_events(active_links):
+    """
+    Deletes events from the database that are not in the provided list of active links
+    and are not internal events (links starting with 'internal:').
+    """
+    if not active_links:
+        # Avoid deleting all events if the scraper fails or returns an empty list
+        return 0
+
+    async with get_db() as db:
+        # Using a parameterized query with placeholders for the IN clause
+        placeholders = ', '.join(['?'] * len(active_links))
+        sql = f"""
+            DELETE FROM events
+            WHERE link NOT LIKE 'internal:%'
+            AND link NOT IN ({placeholders})
+        """
+        cursor = await db.execute(sql, tuple(active_links))
+        await db.commit()
+        return cursor.rowcount
+
 # --- Configs ---
 
 async def set_guild_config(guild_id, **kwargs):

@@ -160,13 +160,26 @@ class Events(commands.Cog):
 
     async def _run_scrape(self):
         events = await scraper.scrape_leekduck()
+        if not events:
+            logger.warning("Scrape returned no events. Skipping database update and cleanup.")
+            return 0
+
         count = 0
+        active_links = []
         for e in events:
             # Upsert
             await database.upsert_event(
                 e['name'], e['link'], e['image_url'], e['start_time'], e['end_time'], e.get('type', 'Event'), e.get('time_text', '')
             )
             count += 1
+            if e.get('link'):
+                active_links.append(e['link'])
+
+        # Delete old/removed events that are no longer present on LeekDuck
+        if active_links:
+            deleted_count = await database.delete_obsolete_events(active_links)
+            logger.info(f"Deleted {deleted_count} obsolete events from database.")
+
         logger.info(f"Database updated with {count} events.")
         return count
 
