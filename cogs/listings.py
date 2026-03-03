@@ -34,6 +34,7 @@ class Listings(commands.Cog):
     def _format_attributes(self, l):
         # l can be a dict.
         attrs = []
+        if l.get('costume'): attrs.append(f"🎭 {l.get('costume')}")
         if l.get('is_shiny'): attrs.append("✨")
         if l.get('is_purified'): attrs.append("🕊️")
         if l.get('is_dynamax'): attrs.append("Dyna")
@@ -220,6 +221,7 @@ class Listings(commands.Cog):
                                    is_mirror: bool,
                                    popis: str,
                                    count: int = 1,
+                                   costume: str = None,
                                    old_listing_id: int = None):
         # NOTE: 'pokemon_id' arg here is now 'species_id' from database
         species_id = pokemon_id
@@ -238,6 +240,7 @@ class Listings(commands.Cog):
                 is_adventure_effect=adventure_effect,
                 is_mirror=is_mirror,
                 details=popis,
+                costume=costume,
                 guild_id=interaction.guild_id if interaction.guild else None,
                 count=count
             )
@@ -355,6 +358,7 @@ class Listings(commands.Cog):
             accounts,
             can_dynamax=bool(species_data.get('can_dynamax', False)),
             initial_details=popis,
+            costumes_json=species_data.get('costumes'),
             submit_callback=self.create_listing_final
         )
 
@@ -506,6 +510,7 @@ class Listings(commands.Cog):
             accounts,
             can_dynamax=can_dyna,
             initial_details=listing['details'],
+            costumes_json=species_data.get('costumes') if species_data else None,
             submit_callback=submit_cb
         )
 
@@ -517,6 +522,7 @@ class Listings(commands.Cog):
         draft_view.is_adventure_effect = bool(listing['is_adventure_effect'])
         draft_view.is_mirror = bool(listing['is_mirror'])
         draft_view.count = int(listing.get('count', 1))
+        draft_view.selected_costume = listing.get('costume')
 
         for acc in accounts:
             if acc['id'] == listing['account_id']:

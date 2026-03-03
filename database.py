@@ -190,6 +190,7 @@ async def init_db():
                     is_adventure_effect BOOLEAN DEFAULT 0,
                     is_mirror BOOLEAN DEFAULT 0,
                     details TEXT,
+                    costume TEXT,
                     status TEXT DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE', 'PENDING', 'COMPLETED', 'CANCELLED')),
                     message_id INTEGER,
                     channel_id INTEGER,
@@ -208,6 +209,10 @@ async def init_db():
             if 'count' not in columns:
                 logger.info("Adding missing column count to listings table.")
                 await db.execute("ALTER TABLE listings ADD COLUMN count INTEGER DEFAULT 1")
+
+            if 'costume' not in columns:
+                logger.info("Adding missing column costume to listings table.")
+                await db.execute("ALTER TABLE listings ADD COLUMN costume TEXT")
 
             # 4. Trades
             await db.execute("""
@@ -494,6 +499,7 @@ async def add_listing(user_id, account_id, listing_type, species_id,
                      is_background=False, is_adventure_effect=False,
                      is_mirror=False,
                      details=None,
+                     costume=None,
                      guild_id=None,
                      count=1):
     async with get_db() as db:
@@ -502,14 +508,14 @@ async def add_listing(user_id, account_id, listing_type, species_id,
                 user_id, account_id, listing_type, species_id,
                 is_shiny, is_purified, is_dynamax, is_gigantamax,
                 is_background, is_adventure_effect, is_mirror, details,
-                guild_id, count
+                costume, guild_id, count
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             user_id, account_id, listing_type, species_id,
             is_shiny, is_purified, is_dynamax, is_gigantamax,
             is_background, is_adventure_effect, is_mirror, details,
-            guild_id, count
+            costume, guild_id, count
         ))
         await db.commit()
         return cursor.lastrowid
@@ -535,7 +541,7 @@ async def get_listing(listing_id):
         sql = """
             SELECT l.*,
                    u.friend_code, u.account_name, u.team, u.region,
-                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url, p.shiny_image_url
+                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url, p.shiny_image_url, p.costumes as costumes_json
             FROM listings l
             JOIN users u ON l.account_id = u.id
             JOIN pokemon_species p ON l.species_id = p.id
@@ -548,7 +554,7 @@ async def get_user_listings(user_id, status='ACTIVE'):
     async with get_db() as db:
         sql = """
             SELECT l.*, u.account_name,
-                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url, p.shiny_image_url
+                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url, p.shiny_image_url, p.costumes as costumes_json
             FROM listings l
             JOIN users u ON l.account_id = u.id
             JOIN pokemon_species p ON l.species_id = p.id
@@ -562,7 +568,7 @@ async def get_account_listings(account_id, status='ACTIVE'):
     async with get_db() as db:
         sql = """
             SELECT l.*, u.account_name,
-                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url, p.shiny_image_url
+                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url, p.shiny_image_url, p.costumes as costumes_json
             FROM listings l
             JOIN users u ON l.account_id = u.id
             JOIN pokemon_species p ON l.species_id = p.id
@@ -629,10 +635,12 @@ async def find_candidates(listing_type, species_id,
                           is_dynamax, is_gigantamax,
                           is_background, is_adventure_effect,
                           is_mirror,
+                          costume,
                           exclude_user_id):
     """
     Finds all ACTIVE listings that match the criteria.
     Now uses species_id.
+    Matches costume exactly OR if either costume is NULL/Jakýkoliv.
     """
     async with get_db() as db:
         sql = """
@@ -650,6 +658,7 @@ async def find_candidates(listing_type, species_id,
             AND l.is_background = ?
             AND l.is_adventure_effect = ?
             AND l.is_mirror = ?
+            AND (l.costume IS NULL OR ? IS NULL OR l.costume = ?)
             AND l.user_id != ?
             AND l.status = 'ACTIVE'
             ORDER BY l.created_at ASC
@@ -660,6 +669,7 @@ async def find_candidates(listing_type, species_id,
             is_dynamax, is_gigantamax,
             is_background, is_adventure_effect,
             is_mirror,
+            costume, costume,
             exclude_user_id
         )) as cursor:
             return await cursor.fetchall()

@@ -7,6 +7,7 @@ from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 # from data.pokemon import POKEMON_IMAGES, POKEMON_IDS # REMOVED: Using DB data
 import qrcode
+import json
 import database # To fetch URLs if needed or rely on passed data
 
 logger = logging.getLogger('discord')
@@ -57,24 +58,43 @@ class ImageGenerator:
 
             pform = item.get('pokemon_form', 'Normal')
             is_shiny = item['is_shiny']
+            costume = item.get('costume')
 
-            # Construct filename: {id}_{form}_{shiny}.png
+            # Construct filename: {id}_{form}_{costume}_{shiny}.png
             # Sanitize form name
             safe_form = pform.replace(" ", "_").lower()
+            safe_costume = costume.replace(" ", "_").lower() if costume else "none"
 
             # Add v1 prefix to bust cache if old files were wrong
-            filename = f"v1_{pid}_{safe_form}_{'shiny' if is_shiny else 'normal'}.png"
+            filename = f"v1_{pid}_{safe_form}_{safe_costume}_{'shiny' if is_shiny else 'normal'}.png"
             filepath = os.path.join(self.sprite_dir, filename)
 
-            if (pid, pform, is_shiny) in needed:
+            if (pid, pform, is_shiny, costume) in needed:
                 continue
-            needed.add((pid, pform, is_shiny))
+            needed.add((pid, pform, is_shiny, costume))
 
             if not os.path.exists(filepath):
                 # Get URL from item (it comes from DB join)
                 url = None
-                if is_shiny and item.get('shiny_image_url'):
-                    url = item.get('shiny_image_url')
+
+                # 1. Costume lookup
+                if costume and item.get('costumes_json'):
+                    try:
+                        costumes = json.loads(item['costumes_json'])
+                        for c in costumes:
+                            if c['name'] == costume:
+                                if is_shiny and c.get('shiny_image_url'):
+                                    url = c['shiny_image_url']
+                                elif c.get('image_url'):
+                                    url = c['image_url']
+                                break
+                    except json.JSONDecodeError:
+                        pass
+
+                # 2. Fallback to normal
+                if not url:
+                    if is_shiny and item.get('shiny_image_url'):
+                        url = item.get('shiny_image_url')
 
                 if not url:
                     url = item.get('image_url')
@@ -89,11 +109,12 @@ class ImageGenerator:
                 download_tasks = [self._download_image(session, url, path) for url, path in tasks]
                 await asyncio.gather(*download_tasks)
 
-    def _get_sprite_sync(self, pokemon_id, pokemon_form, is_shiny):
+    def _get_sprite_sync(self, pokemon_id, pokemon_form, is_shiny, costume=None):
         """Sync function to load image from disk."""
         safe_form = pokemon_form.replace(" ", "_").lower()
+        safe_costume = costume.replace(" ", "_").lower() if costume else "none"
         # Ensure we use the v1 prefix
-        filename = f"v1_{pokemon_id}_{safe_form}_{'shiny' if is_shiny else 'normal'}.png"
+        filename = f"v1_{pokemon_id}_{safe_form}_{safe_costume}_{'shiny' if is_shiny else 'normal'}.png"
         filepath = os.path.join(self.sprite_dir, filename)
 
         if os.path.exists(filepath):
@@ -242,8 +263,9 @@ class ImageGenerator:
             is_background = item.get('is_background', False)
             is_adventure_effect = item.get('is_adventure_effect', False)
             is_mirror = item.get('is_mirror', False)
+            costume = item.get('costume')
 
-            sprite = self._get_sprite_sync(pokemon_id, pokemon_form, is_shiny)
+            sprite = self._get_sprite_sync(pokemon_id, pokemon_form, is_shiny, costume)
             if sprite:
                 sw, sh = sprite.size
                 scale = min(90/sw, 90/sh, 1.0)

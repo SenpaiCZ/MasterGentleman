@@ -33,6 +33,7 @@ async def find_match(new_listing_id):
             is_background=new_listing['is_background'],
             is_adventure_effect=new_listing['is_adventure_effect'],
             is_mirror=is_mirror,
+            costume=new_listing.get('costume'),
             exclude_user_id=new_listing['user_id']
         )
 
