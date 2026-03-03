@@ -280,24 +280,35 @@ class ListingDraftView(ui.View):
         embed = discord.Embed(title=title, description=desc, color=color)
 
         # Get Image Logic
-        # Priority: DB Shiny URL (if shiny) > DB Normal URL > JSON Shiny (if shiny) > JSON Normal
+        # Priority: Costume URL > DB Shiny URL (if shiny) > DB Normal URL > JSON Shiny (if shiny) > JSON Normal
 
         final_image_url = None
 
-        if self.is_shiny and self.shiny_image_url:
-            final_image_url = self.shiny_image_url
-        elif self.image_url:
-            # If standard, or shiny but no specific shiny URL
-            final_image_url = self.image_url
+        # Check costume image first
+        if self.selected_costume and self.available_costumes:
+            for c in self.available_costumes:
+                if c['name'] == self.selected_costume:
+                    if self.is_shiny and c.get('shiny_image_url'):
+                        final_image_url = c['shiny_image_url']
+                    elif c.get('image_url'):
+                        final_image_url = c['image_url']
+                    break
 
-        # Fallback to JSON if DB URLs are missing
         if not final_image_url:
-            img_info = POKEMON_IMAGES.get(self.pokedex_num)
-            if img_info:
-                if self.is_shiny:
-                    final_image_url = img_info.get('shiny') or img_info.get('normal')
-                else:
-                    final_image_url = img_info.get('normal')
+            if self.is_shiny and self.shiny_image_url:
+                final_image_url = self.shiny_image_url
+            elif self.image_url:
+                # If standard, or shiny but no specific shiny URL
+                final_image_url = self.image_url
+
+            # Fallback to JSON if DB URLs are missing
+            if not final_image_url:
+                img_info = POKEMON_IMAGES.get(self.pokedex_num)
+                if img_info:
+                    if self.is_shiny:
+                        final_image_url = img_info.get('shiny') or img_info.get('normal')
+                    else:
+                        final_image_url = img_info.get('normal')
 
         if final_image_url:
             embed.set_thumbnail(url=final_image_url)
