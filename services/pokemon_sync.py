@@ -90,7 +90,14 @@ COMMON_VARIANTS = [
     "Primal", "Armored", "Origin", "Therian", "Incarnate",
     "Shadow", "Purified",
     "Alola_Shadow", "Galar_Shadow", "Hisui_Shadow", "Paldea_Shadow",
-    "Armored_Shadow"
+    "Armored_Shadow",
+    # Unown Forms
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+    "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+    "Exclamation", "Question",
+    # Furfrou Trims
+    "Heart_Trim", "Star_Trim", "Diamond_Trim", "Debutante_Trim",
+    "Matron_Trim", "Dandy_Trim", "La_Reine_Trim", "Kabuki_Trim", "Pharaoh_Trim"
 ]
 
 async def process_pokemon_family(db, session, pokedex_num):
@@ -227,6 +234,21 @@ async def process_single_form(db, session, pokedex_num, url, base_name):
     if "Galar" in form_name: form_name = "Galarian"
     if "Hisui" in form_name: form_name = "Hisuian"
     if "Paldea" in form_name: form_name = "Paldean"
+
+    # Handle Unown forms specifically
+    if pokedex_num == 201:
+        if suffix == "Exclamation":
+            form_name = "!"
+        elif suffix == "Question":
+            form_name = "?"
+        elif len(suffix) == 1 and suffix.isalpha():
+            form_name = suffix.upper()
+
+    # Handle Furfrou trims specifically
+    if pokedex_num == 676:
+        if "Trim" in form_name:
+            # Re-capitalize properly, e.g., "Heart Trim" instead of "Heart Trim" (already title-cased)
+            pass
 
     best_moveset = parse_best_moveset(soup)
 
