@@ -114,7 +114,30 @@ class Listings(commands.Cog):
         )
         embed.add_field(name="Účet", value=f"{acc_name}", inline=False)
 
-        img_url = listing.get('image_url')
+        import json
+        img_url = None
+        is_shiny = listing.get('is_shiny', False)
+        costume = listing.get('costume')
+
+        if costume and listing.get('costumes_json'):
+            try:
+                costumes = json.loads(listing['costumes_json'])
+                for c in costumes:
+                    if c['name'] == costume:
+                        if is_shiny and c.get('shiny_image_url'):
+                            img_url = c['shiny_image_url']
+                        elif c.get('image_url'):
+                            img_url = c['image_url']
+                        break
+            except json.JSONDecodeError:
+                pass
+
+        if not img_url:
+            if is_shiny and listing.get('shiny_image_url'):
+                img_url = listing.get('shiny_image_url')
+            else:
+                img_url = listing.get('image_url')
+
         if img_url:
             embed.set_thumbnail(url=img_url)
 
