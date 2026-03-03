@@ -54,7 +54,7 @@ class ListingCountModal(ui.Modal, title="Počet (Quantity)"):
 import json
 
 class ListingDraftView(ui.View):
-    def __init__(self, interaction, listing_type, species_id, pokedex_num, pokemon_name, image_url, shiny_image_url, accounts, can_dynamax=False, initial_details=None, costumes_json=None, submit_callback=None):
+    def __init__(self, interaction, listing_type, species_id, pokedex_num, pokemon_name, image_url, shiny_image_url, accounts, can_dynamax=False, initial_details=None, costumes_json=None, available_variants=None, submit_callback=None):
         super().__init__(timeout=180)
         self.original_interaction = interaction
         self.listing_type = listing_type
@@ -66,6 +66,9 @@ class ListingDraftView(ui.View):
         self.accounts = accounts
         self.can_dynamax = can_dynamax
         self.submit_callback = submit_callback
+
+        # Unown / Furfrou Forms
+        self.available_variants = available_variants or []
 
         self.available_costumes = []
         if costumes_json:
@@ -184,6 +187,37 @@ class ListingDraftView(ui.View):
 
         row_offset = 2
 
+        # Variant Select (for Unown and Furfrou)
+        if self.available_variants and len(self.available_variants) > 1:
+            # We can have up to 29 variants (Unown). We need to split them into multiple selects if > 25
+            chunk_size = 25
+            chunks = [self.available_variants[i:i + chunk_size] for i in range(0, len(self.available_variants), chunk_size)]
+
+            for index, chunk in enumerate(chunks):
+                options = []
+                for v in chunk:
+                    is_selected = (self.species_id == v['id'])
+                    label = v['form'] if v['form'] != 'Normal' else 'Základní'
+                    options.append(discord.SelectOption(label=label, value=str(v['id']), default=is_selected))
+
+                placeholder = "🧬 Vybrat formu"
+                if len(chunks) > 1:
+                    first_label = chunk[0]['form'] if chunk[0]['form'] != 'Normal' else 'Základní'
+                    last_label = chunk[-1]['form'] if chunk[-1]['form'] != 'Normal' else 'Základní'
+                    placeholder = f"🧬 Vybrat formu ({first_label} - {last_label})"
+
+                select_variant = ui.Select(
+                    custom_id=f"select_variant_{index}",
+                    placeholder=placeholder,
+                    min_values=1,
+                    max_values=1,
+                    options=options,
+                    row=row_offset
+                )
+                select_variant.callback = self.select_variant
+                self.add_item(select_variant)
+                row_offset += 1
+
         # Costume Select (if costumes exist)
         if self.available_costumes:
             options = [discord.SelectOption(label="Bez kostýmu / Jakýkoliv", value="none", default=(self.selected_costume is None))]
@@ -192,6 +226,7 @@ class ListingDraftView(ui.View):
                 options.append(discord.SelectOption(label=c['name'], value=c['name'], default=is_selected))
 
             select_costume = ui.Select(
+                custom_id="select_costume",
                 placeholder="🎭 Vybrat kostým (volitelné)",
                 min_values=1,
                 max_values=1,
@@ -216,6 +251,7 @@ class ListingDraftView(ui.View):
                 ))
 
             select_account = ui.Select(
+                custom_id="select_account",
                 placeholder="👤 Vybrat účet",
                 min_values=1,
                 max_values=1,
@@ -366,9 +402,29 @@ class ListingDraftView(ui.View):
 
         await interaction.response.send_modal(ListingCountModal(self.count, modal_callback))
 
+    async def select_variant(self, interaction: discord.Interaction):
+        # Find which select component triggered this
+        # The interaction.data['custom_id'] tells us which select it was
+        triggered_custom_id = interaction.data['custom_id']
+        select = [item for item in self.children if isinstance(item, ui.Select) and getattr(item, 'custom_id', None) == triggered_custom_id][0]
+
+        selected_val = int(select.values[0])
+
+        # Update species_id and dynamically update image URLs
+        for v in self.available_variants:
+            if v['id'] == selected_val:
+                self.species_id = v['id']
+                self.pokemon_name = v['name']
+                if v['form'] != 'Normal':
+                    self.pokemon_name += f" ({v['form']})"
+                self.image_url = v.get('image_url')
+                self.shiny_image_url = v.get('shiny_image_url')
+                break
+
+        await self.update_view(interaction)
+
     async def select_costume(self, interaction: discord.Interaction):
-        # The select interaction returns a list of values
-        select = [item for item in self.children if isinstance(item, ui.Select) and 'kostým' in item.placeholder.lower()][0]
+        select = [item for item in self.children if getattr(item, 'custom_id', None) == 'select_costume'][0]
         val = select.values[0]
         if val == "none":
             self.selected_costume = None
@@ -378,8 +434,7 @@ class ListingDraftView(ui.View):
         await self.update_view(interaction)
 
     async def select_account(self, interaction: discord.Interaction):
-        # The select interaction returns a list of values
-        select = [item for item in self.children if isinstance(item, ui.Select) and 'účet' in item.placeholder.lower()][0]
+        select = [item for item in self.children if getattr(item, 'custom_id', None) == 'select_account'][0]
         selected_val = int(select.values[0])
 
         # Update selected account

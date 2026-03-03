@@ -149,8 +149,23 @@ class Listings(commands.Cog):
         # Use extended search (Name or Type), excluding Mega variants
         results = await database.search_pokemon_species_extended(current, limit=25, exclude_mega=True)
         choices = []
+
+        seen_base_ids = set()
+
         for r in results:
             name = r['name']
+
+            # For Unown (201) and Furfrou (676), only show the base form in autocomplete to prevent clutter
+            if r['pokedex_num'] in (201, 676):
+                if r['pokedex_num'] in seen_base_ids:
+                    continue
+                seen_base_ids.add(r['pokedex_num'])
+                # Find the Normal form ID or just use this one if Normal isn't first,
+                # but we prefer the exact name "Unown" / "Furfrou" without form suffix
+                name = r['name'] # "Unown" or "Furfrou"
+                choices.append(app_commands.Choice(name=name, value=str(r['id'])))
+                continue
+
             if r['form'] != 'Normal':
                 name += f" ({r['form']})"
 
@@ -370,6 +385,11 @@ class Listings(commands.Cog):
             await interaction.response.send_message("❌ Nemáte registrovaný žádný účet. Použijte `/registrace`.", ephemeral=True)
             return
 
+        # Fetch variants if it's Unown (201) or Furfrou (676)
+        available_variants = []
+        if pokedex_num in (201, 676):
+            available_variants = await database.get_pokemon_variants(pokedex_num)
+
         view = ListingDraftView(
             interaction,
             listing_type,
@@ -382,6 +402,7 @@ class Listings(commands.Cog):
             can_dynamax=bool(species_data.get('can_dynamax', False)),
             initial_details=popis,
             costumes_json=species_data.get('costumes'),
+            available_variants=available_variants,
             submit_callback=self.create_listing_final
         )
 
@@ -522,6 +543,10 @@ class Listings(commands.Cog):
         species_data = await database.get_pokemon_species_by_id(listing['species_id'])
         can_dyna = bool(species_data.get('can_dynamax', False)) if species_data else False
 
+        available_variants = []
+        if listing['pokemon_id'] in (201, 676):
+            available_variants = await database.get_pokemon_variants(listing['pokemon_id'])
+
         draft_view = ListingDraftView(
             interaction,
             listing['listing_type'],
@@ -534,6 +559,7 @@ class Listings(commands.Cog):
             can_dynamax=can_dyna,
             initial_details=listing['details'],
             costumes_json=species_data.get('costumes') if species_data else None,
+            available_variants=available_variants,
             submit_callback=submit_cb
         )
 
