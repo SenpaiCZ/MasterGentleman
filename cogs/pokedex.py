@@ -156,11 +156,62 @@ class Pokedex(commands.Cog):
         if features:
             embed.add_field(name="Capabilities in GO", value=", ".join(features), inline=False)
 
+        # Costumes info
+        costumes = []
+        if species.get('costumes'):
+            try:
+                costumes = json.loads(species['costumes'])
+            except json.JSONDecodeError:
+                pass
+
+        if costumes:
+            embed.add_field(name="Costumes", value=f"Dostupné kostýmy: {len(costumes)}\nVyberte z menu níže pro zobrazení.", inline=False)
+
         # Links - Focused on GO
         links = f"[GO Hub Database](https://db.pokemongohub.net/pokemon/{species['pokedex_num']})"
         embed.add_field(name="More Info", value=links, inline=False)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if costumes:
+            view = PokedexView(embed, costumes, species['image_url'])
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+class PokedexView(discord.ui.View):
+    def __init__(self, embed: discord.Embed, costumes: list, default_image_url: str):
+        super().__init__(timeout=180)
+        self.embed = embed
+        self.costumes = costumes
+        self.default_image_url = default_image_url
+
+        # Create select menu
+        options = [discord.SelectOption(label="Standard (Bez kostýmu)", value="default")]
+        for i, c in enumerate(costumes[:24]): # max 25 options
+            options.append(discord.SelectOption(label=c['name'], value=str(i)))
+
+        select = discord.ui.Select(placeholder="Zobrazit kostým...", options=options)
+        select.callback = self.select_callback
+        self.add_item(select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        select = self.children[0]
+        selected = select.values[0]
+
+        if selected == "default":
+            if self.default_image_url:
+                self.embed.set_thumbnail(url=self.default_image_url)
+            else:
+                self.embed._thumbnail = None
+        else:
+            idx = int(selected)
+            costume = self.costumes[idx]
+            # Prefer standard costume image over shiny to match base, or use whatever is available
+            img_url = costume.get('image_url') or costume.get('shiny_image_url')
+            if img_url:
+                self.embed.set_thumbnail(url=img_url)
+
+        await interaction.response.edit_message(embed=self.embed, view=self)
+
 
 async def setup(bot):
     await bot.add_cog(Pokedex(bot))

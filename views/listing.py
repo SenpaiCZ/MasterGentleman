@@ -51,8 +51,10 @@ class ListingCountModal(ui.Modal, title="Počet (Quantity)"):
         await self.callback(interaction, val)
 
 
+import json
+
 class ListingDraftView(ui.View):
-    def __init__(self, interaction, listing_type, species_id, pokedex_num, pokemon_name, image_url, shiny_image_url, accounts, can_dynamax=False, initial_details=None, submit_callback=None):
+    def __init__(self, interaction, listing_type, species_id, pokedex_num, pokemon_name, image_url, shiny_image_url, accounts, can_dynamax=False, initial_details=None, costumes_json=None, submit_callback=None):
         super().__init__(timeout=180)
         self.original_interaction = interaction
         self.listing_type = listing_type
@@ -65,6 +67,13 @@ class ListingDraftView(ui.View):
         self.can_dynamax = can_dynamax
         self.submit_callback = submit_callback
 
+        self.available_costumes = []
+        if costumes_json:
+            try:
+                self.available_costumes = json.loads(costumes_json)
+            except json.JSONDecodeError:
+                pass
+
         # State
         self.is_shiny = False
         self.is_purified = False
@@ -75,6 +84,7 @@ class ListingDraftView(ui.View):
         self.is_mirror = False
         self.details = initial_details
         self.count = 1
+        self.selected_costume = None
 
         # Adventure Effect Eligibility
         # Allowed: Origin Dialga, Origin Palkia, Black Kyurem, White Kyurem,
@@ -172,8 +182,27 @@ class ListingDraftView(ui.View):
         btn_count.callback = self.open_count_modal
         self.add_item(btn_count)
 
-        # Row 2: Account Select (if multiple accounts)
         row_offset = 2
+
+        # Costume Select (if costumes exist)
+        if self.available_costumes:
+            options = [discord.SelectOption(label="Bez kostýmu / Jakýkoliv", value="none", default=(self.selected_costume is None))]
+            for i, c in enumerate(self.available_costumes[:24]): # Limit to 24 + 1 default
+                is_selected = (self.selected_costume == c['name'])
+                options.append(discord.SelectOption(label=c['name'], value=c['name'], default=is_selected))
+
+            select_costume = ui.Select(
+                placeholder="🎭 Vybrat kostým (volitelné)",
+                min_values=1,
+                max_values=1,
+                options=options,
+                row=row_offset
+            )
+            select_costume.callback = self.select_costume
+            self.add_item(select_costume)
+            row_offset += 1
+
+        # Account Select (if multiple accounts)
         if len(self.accounts) > 1:
             options = []
             for acc in self.accounts:
@@ -237,6 +266,9 @@ class ListingDraftView(ui.View):
 
         if status_parts:
             desc += f"**Stav:** {' | '.join(status_parts)}\n"
+
+        if self.selected_costume:
+            desc += f"**Kostým:** {self.selected_costume}\n"
 
         # Details
         if self.details:
@@ -323,9 +355,20 @@ class ListingDraftView(ui.View):
 
         await interaction.response.send_modal(ListingCountModal(self.count, modal_callback))
 
+    async def select_costume(self, interaction: discord.Interaction):
+        # The select interaction returns a list of values
+        select = [item for item in self.children if isinstance(item, ui.Select) and 'kostým' in item.placeholder.lower()][0]
+        val = select.values[0]
+        if val == "none":
+            self.selected_costume = None
+        else:
+            self.selected_costume = val
+
+        await self.update_view(interaction)
+
     async def select_account(self, interaction: discord.Interaction):
         # The select interaction returns a list of values
-        select = [item for item in self.children if isinstance(item, ui.Select)][0]
+        select = [item for item in self.children if isinstance(item, ui.Select) and 'účet' in item.placeholder.lower()][0]
         selected_val = int(select.values[0])
 
         # Update selected account
@@ -360,7 +403,8 @@ class ListingDraftView(ui.View):
                 self.is_adventure_effect,
                 self.is_mirror,
                 self.details,
-                self.count
+                self.count,
+                self.selected_costume
             )
 
     async def cancel(self, interaction: discord.Interaction):
@@ -384,6 +428,7 @@ class ListingManagementView(ui.View):
             emoji = "📥" if is_have else "📤"
 
             desc_parts = []
+            if l.get('costume'): desc_parts.append("🎭")
             if l['is_shiny']: desc_parts.append("✨")
             if l.get('is_mirror'): desc_parts.append("🪞")
             if l.get('count', 1) > 1: desc_parts.append(f"(x{l['count']})")
