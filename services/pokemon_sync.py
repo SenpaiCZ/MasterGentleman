@@ -99,13 +99,12 @@ import json
 def get_special_forms(pokedex_num):
     forms = []
     if pokedex_num == 201:
-        # Unown: A-Z (000, 003-027), ! (028), ? (029)
+        # Unown: A-Z (000-025), ! (026), ? (027)
         unown_letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         for i, letter in enumerate(unown_letters):
-            form_idx = 0 if i == 0 else i + 2
-            forms.append((letter, f"{form_idx:03d}"))
-        forms.append(("!", "028"))
-        forms.append(("?", "029"))
+            forms.append((letter, f"{i:03d}"))
+        forms.append(("!", "026"))
+        forms.append(("?", "027"))
 
         costumes = []
         for name, idx in forms:
