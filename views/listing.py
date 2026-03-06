@@ -271,7 +271,12 @@ class ListingDraftView(ui.View):
                     options.append(discord.SelectOption(label=c['name'], value=c['name'], default=is_selected))
 
                 # Adjust placeholder for multiple chunks
-                placeholder = "🎭 Vybrat kostým (volitelné)" if len(chunks) == 1 else f"🎭 Vybrat kostým (část {index+1})"
+                if len(chunks) == 1:
+                    placeholder = "🎭 Vybrat kostým (volitelné)"
+                else:
+                    first_label = chunk[0]['name']
+                    last_label = chunk[-1]['name']
+                    placeholder = f"🎭 Vybrat kostým ({first_label} - {last_label})"
 
                 # Determine correct row. Max 5 rows in a View.
                 current_row = row_offset if row_offset < 4 else 4
