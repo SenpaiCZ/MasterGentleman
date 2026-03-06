@@ -120,15 +120,15 @@ def get_special_forms(pokedex_num):
         # Furfrou Trims
         furfrou_trims = [
             ("Natural Form", "000"),
-            ("Heart Trim", "003"),
-            ("Star Trim", "004"),
-            ("Diamond Trim", "005"),
-            ("Debutante Trim", "006"),
-            ("Matron Trim", "007"),
-            ("Dandy Trim", "008"),
-            ("La Reine Trim", "009"),
-            ("Kabuki Trim", "010"),
-            ("Pharaoh Trim", "011"),
+            ("Heart Trim", "001"),
+            ("Star Trim", "002"),
+            ("Diamond Trim", "003"),
+            ("Debutante Trim", "004"),
+            ("Matron Trim", "005"),
+            ("Dandy Trim", "006"),
+            ("La Reine Trim", "007"),
+            ("Kabuki Trim", "008"),
+            ("Pharaoh Trim", "009"),
         ]
         costumes = []
         for name, idx in furfrou_trims:
