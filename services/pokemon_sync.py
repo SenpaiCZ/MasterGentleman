@@ -91,14 +91,56 @@ COMMON_VARIANTS = [
     "Shadow", "Purified",
     "Alola_Shadow", "Galar_Shadow", "Hisui_Shadow", "Paldea_Shadow",
     "Armored_Shadow",
-    # Unown Forms
-    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
-    "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
-    "Exclamation", "Question",
-    # Furfrou Trims
-    "Heart_Trim", "Star_Trim", "Diamond_Trim", "Debutante_Trim",
-    "Matron_Trim", "Dandy_Trim", "La_Reine_Trim", "Kabuki_Trim", "Pharaoh_Trim"
 ]
+
+
+import json
+
+def get_special_forms(pokedex_num):
+    forms = []
+    if pokedex_num == 201:
+        # Unown: A-Z (000, 003-027), ! (028), ? (029)
+        unown_letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        for i, letter in enumerate(unown_letters):
+            form_idx = 0 if i == 0 else i + 2
+            forms.append((letter, f"{form_idx:03d}"))
+        forms.append(("!", "028"))
+        forms.append(("?", "029"))
+
+        costumes = []
+        for name, idx in forms:
+            costumes.append({
+                'name': name,
+                'image_url': f"https://db.pokemongohub.net/images/pokemon-home-renders/Normal/poke_capture_0201_{idx}_uk_n_00000000_f_n.png",
+                'shiny_image_url': f"https://db.pokemongohub.net/images/pokemon-home-renders/Shiny/poke_capture_0201_{idx}_uk_n_00000000_f_r.png"
+            })
+        return costumes
+
+    elif pokedex_num == 676:
+        # Furfrou Trims
+        furfrou_trims = [
+            ("Natural Form", "000"),
+            ("Heart Trim", "003"),
+            ("Star Trim", "004"),
+            ("Diamond Trim", "005"),
+            ("Debutante Trim", "006"),
+            ("Matron Trim", "007"),
+            ("Dandy Trim", "008"),
+            ("La Reine Trim", "009"),
+            ("Kabuki Trim", "010"),
+            ("Pharaoh Trim", "011"),
+        ]
+        costumes = []
+        for name, idx in furfrou_trims:
+            costumes.append({
+                'name': name,
+                'image_url': f"https://db.pokemongohub.net/images/pokemon-home-renders/Normal/poke_capture_0676_{idx}_mf_n_00000000_f_n.png",
+                'shiny_image_url': f"https://db.pokemongohub.net/images/pokemon-home-renders/Shiny/poke_capture_0676_{idx}_mf_n_00000000_f_r.png"
+            })
+        return costumes
+
+    return []
+
 
 async def process_pokemon_family(db, session, pokedex_num):
     """
@@ -133,6 +175,16 @@ async def process_pokemon_family(db, session, pokedex_num):
     tier_data = parse_tier_ranking(soup)
     best_moveset = parse_best_moveset(soup)
     costumes = parse_costumes(soup)
+
+    special_forms = get_special_forms(pokedex_num)
+    if special_forms:
+        parsed_costumes = json.loads(costumes) if costumes else []
+        # To avoid duplicates if already parsed from HTML
+        existing_names = {c['name'] for c in parsed_costumes}
+        for sf in special_forms:
+            if sf['name'] not in existing_names:
+                parsed_costumes.append(sf)
+        costumes = json.dumps(parsed_costumes)
 
     # Determine dynamax status from FAQ
     can_dynamax = parse_dynamax_status(soup, base_name)
@@ -257,6 +309,16 @@ async def process_single_form(db, session, pokedex_num, url, base_name):
     image_url, shiny_image_url = parse_images(soup)
     tier_data = parse_tier_ranking(soup)
     costumes = parse_costumes(soup)
+
+    special_forms = get_special_forms(pokedex_num)
+    if special_forms:
+        parsed_costumes = json.loads(costumes) if costumes else []
+        # To avoid duplicates if already parsed from HTML
+        existing_names = {c['name'] for c in parsed_costumes}
+        for sf in special_forms:
+            if sf['name'] not in existing_names:
+                parsed_costumes.append(sf)
+        costumes = json.dumps(parsed_costumes)
 
     # Determine dynamax status from FAQ
     # We check if the form name is part of the name used in FAQ, often FAQ refers to the base name

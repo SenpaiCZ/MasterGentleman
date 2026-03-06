@@ -137,55 +137,79 @@ class ListingDraftView(ui.View):
         # UI Setup
         self._update_components()
 
-    def _create_button(self, label, emoji, is_active, custom_id, callback, row):
+    def _create_button(self, label, emoji, is_active, custom_id, callback):
         style = discord.ButtonStyle.primary if is_active else discord.ButtonStyle.secondary
         # Shiny uses success green
         if label == "Shiny" and is_active:
             style = discord.ButtonStyle.success
 
-        btn = ui.Button(label=label, emoji=emoji, style=style, custom_id=custom_id, row=row)
+        btn = ui.Button(label=label, emoji=emoji, style=style, custom_id=custom_id, )
         btn.callback = callback
         return btn
 
     def _update_components(self):
         self.clear_items()
 
-        # Row 0: Basic Attributes
-        self.add_item(self._create_button("Shiny", "✨", self.is_shiny, "toggle_shiny", self.toggle_shiny, 0))
-        self.add_item(self._create_button("Purified", "🕊️", self.is_purified, "toggle_purified", self.toggle_purified, 0))
+        buttons = []
+
+        # Basic Attributes
+        buttons.append(self._create_button("Shiny", "✨", self.is_shiny, "toggle_shiny", self.toggle_shiny))
+        buttons.append(self._create_button("Purified", "🕊️", self.is_purified, "toggle_purified", self.toggle_purified))
         if self.can_dynamax:
-            self.add_item(self._create_button("Dyna", None, self.is_dynamax, "toggle_dynamax", self.toggle_dynamax, 0))
-        # Removed Giga button
-        self.add_item(self._create_button("BG", "🌍", self.is_background, "toggle_bg", self.toggle_bg, 0))
+            buttons.append(self._create_button("Dyna", None, self.is_dynamax, "toggle_dynamax", self.toggle_dynamax))
+        buttons.append(self._create_button("BG", "🌍", self.is_background, "toggle_bg", self.toggle_bg))
 
-        # Row 1: Advanced Attributes & Details
+        # Advanced Attributes & Details
         if self.can_adventure_effect:
-            self.add_item(self._create_button("Adventure Effect", "🪄", self.is_adventure_effect, "toggle_adv", self.toggle_adv, 1))
+            buttons.append(self._create_button("Adventure Effect", "🪄", self.is_adventure_effect, "toggle_adv", self.toggle_adv))
 
-        self.add_item(self._create_button("Mirror", "🪞", self.is_mirror, "toggle_mirror", self.toggle_mirror, 1))
+        buttons.append(self._create_button("Mirror", "🪞", self.is_mirror, "toggle_mirror", self.toggle_mirror))
 
         btn_details = ui.Button(
             label="Popis",
             emoji="📝",
             style=discord.ButtonStyle.secondary,
-            custom_id="edit_details",
-            row=1
+            custom_id="edit_details"
         )
         btn_details.callback = self.open_details_modal
-        self.add_item(btn_details)
+        buttons.append(btn_details)
 
         # Count Button
         btn_count = ui.Button(
             label=f"Počet: {self.count}",
             emoji="#️⃣",
             style=discord.ButtonStyle.secondary,
-            custom_id="edit_count",
-            row=1
+            custom_id="edit_count"
         )
         btn_count.callback = self.open_count_modal
-        self.add_item(btn_count)
+        buttons.append(btn_count)
 
-        row_offset = 2
+        # Publish Button
+        btn_publish = ui.Button(
+            label="Zveřejnit",
+            emoji="✅",
+            style=discord.ButtonStyle.green,
+            custom_id="publish_listing"
+        )
+        btn_publish.callback = self.publish
+        buttons.append(btn_publish)
+
+        # Cancel Button
+        btn_cancel = ui.Button(
+            label="Zrušit",
+            emoji="❌",
+            style=discord.ButtonStyle.red,
+            custom_id="cancel_listing"
+        )
+        btn_cancel.callback = self.cancel
+        buttons.append(btn_cancel)
+
+        # Add buttons with automatic row assignment
+        for i, btn in enumerate(buttons):
+            btn.row = i // 5
+            self.add_item(btn)
+
+        row_offset = (len(buttons) - 1) // 5 + 1
 
         # Variant Select (for Unown and Furfrou)
         if self.available_variants and len(self.available_variants) > 1:
@@ -220,22 +244,49 @@ class ListingDraftView(ui.View):
 
         # Costume Select (if costumes exist)
         if self.available_costumes:
-            options = [discord.SelectOption(label="Bez kostýmu / Jakýkoliv", value="none", default=(self.selected_costume is None))]
-            for i, c in enumerate(self.available_costumes[:24]): # Limit to 24 + 1 default
-                is_selected = (self.selected_costume == c['name'])
-                options.append(discord.SelectOption(label=c['name'], value=c['name'], default=is_selected))
+            # We can have more than 24 costumes (e.g. Unown has 28). We need to chunk them.
+            # Max options per select is 25.
+            # The first select will have the "Bez kostýmu / Jakýkoliv" option.
 
-            select_costume = ui.Select(
-                custom_id="select_costume",
-                placeholder="🎭 Vybrat kostým (volitelné)",
-                min_values=1,
-                max_values=1,
-                options=options,
-                row=row_offset
-            )
-            select_costume.callback = self.select_costume
-            self.add_item(select_costume)
-            row_offset += 1
+            chunk_size = 24
+
+            # Prevent more chunks than we can fit.
+            # We have row_offset currently at maybe 2. So we have 3 rows left (2, 3, 4).
+            # 1 row is needed for Account Select (if any), 1 row is needed for action buttons.
+            # No, action buttons don't have a row anymore? They were added earlier with `.row` set!
+            # Oh, wait! The action buttons were added to `buttons` array, taking row 0 and 1.
+            # So row 2, 3, 4 are totally free for Selects.
+            # Account select takes 1 row, leaving 2 rows for Costumes (and maybe 1 for Variant Select).
+            # Let's just limit costumes chunks to 2, or maximum available rows.
+            max_chunks = 2
+            chunks = [self.available_costumes[i:i + chunk_size] for i in range(0, len(self.available_costumes), chunk_size)][:max_chunks]
+
+            for index, chunk in enumerate(chunks):
+                options = []
+                if index == 0:
+                    options.append(discord.SelectOption(label="Bez kostýmu / Jakýkoliv", value="none", default=(self.selected_costume is None)))
+
+                for c in chunk:
+                    is_selected = (self.selected_costume == c['name'])
+                    options.append(discord.SelectOption(label=c['name'], value=c['name'], default=is_selected))
+
+                # Adjust placeholder for multiple chunks
+                placeholder = "🎭 Vybrat kostým (volitelné)" if len(chunks) == 1 else f"🎭 Vybrat kostým (část {index+1})"
+
+                # Determine correct row. Max 5 rows in a View.
+                current_row = row_offset if row_offset < 4 else 4
+
+                select_costume = ui.Select(
+                    custom_id=f"select_costume_{index}",
+                    placeholder=placeholder,
+                    min_values=1,
+                    max_values=1,
+                    options=options,
+                    row=current_row
+                )
+                select_costume.callback = self.select_costume
+                self.add_item(select_costume)
+                row_offset += 1
 
         # Account Select (if multiple accounts)
         if len(self.accounts) > 1:
@@ -250,38 +301,20 @@ class ListingDraftView(ui.View):
                     default=(acc['id'] == self.selected_account_id)
                 ))
 
+            current_row = row_offset if row_offset <= 4 else 4
             select_account = ui.Select(
                 custom_id="select_account",
                 placeholder="👤 Vybrat účet",
                 min_values=1,
                 max_values=1,
                 options=options,
-                row=row_offset
+                row=current_row
             )
             select_account.callback = self.select_account
             self.add_item(select_account)
             row_offset += 1
 
-        # Final Row: Actions
-        btn_publish = ui.Button(
-            label="Zveřejnit",
-            emoji="✅",
-            style=discord.ButtonStyle.green,
-            custom_id="publish_listing",
-            row=row_offset
-        )
-        btn_publish.callback = self.publish
-        self.add_item(btn_publish)
 
-        btn_cancel = ui.Button(
-            label="Zrušit",
-            emoji="❌",
-            style=discord.ButtonStyle.red,
-            custom_id="cancel_listing",
-            row=row_offset
-        )
-        btn_cancel.callback = self.cancel
-        self.add_item(btn_cancel)
 
     def _get_embed(self):
         title = "Návrh Nabídky" if self.listing_type == 'HAVE' else "Návrh Poptávky"
@@ -424,7 +457,10 @@ class ListingDraftView(ui.View):
         await self.update_view(interaction)
 
     async def select_costume(self, interaction: discord.Interaction):
-        select = [item for item in self.children if getattr(item, 'custom_id', None) == 'select_costume'][0]
+        # We might have multiple costume selects. Find the one the user interacted with.
+        triggered_custom_id = interaction.data['custom_id']
+        select = [item for item in self.children if isinstance(item, ui.Select) and getattr(item, 'custom_id', None) == triggered_custom_id][0]
+
         val = select.values[0]
         if val == "none":
             self.selected_costume = None
