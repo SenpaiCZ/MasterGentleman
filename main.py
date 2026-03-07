@@ -1,11 +1,9 @@
 import discord
 import os
-import asyncio
 from discord.ext import commands
 import config
 import logging
 import database
-import services.pokemon_sync as pokemon_sync
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)

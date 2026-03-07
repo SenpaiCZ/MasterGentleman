@@ -8,7 +8,6 @@ from io import BytesIO
 # from data.pokemon import POKEMON_IMAGES, POKEMON_IDS # REMOVED: Using DB data
 import qrcode
 import json
-import database # To fetch URLs if needed or rely on passed data
 
 logger = logging.getLogger('discord')
 

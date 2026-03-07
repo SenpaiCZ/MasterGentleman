@@ -1,7 +1,6 @@
 import discord
 from discord import ui
 import logging
-import database
 from data.pokemon import POKEMON_IMAGES, POKEMON_IDS
 
 logger = logging.getLogger('discord')
