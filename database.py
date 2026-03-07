@@ -720,6 +720,21 @@ async def mark_event_notified(event_id, notification_type):
         await db.execute(f"UPDATE events SET {col_name} = 1 WHERE id = ?", (event_id,))
         await db.commit()
 
+async def mark_events_notified(event_ids, notification_type):
+    """Marks multiple events as notified in a single batch query."""
+    if not event_ids:
+        return
+
+    # Whitelist validation for column name to prevent SQL injection
+    if notification_type not in ('morning', '2h', '5m'):
+        raise ValueError(f"Invalid notification type: {notification_type}")
+
+    async with get_db() as db:
+        col_name = f"notified_{notification_type}"
+        placeholders = ', '.join(['?'] * len(event_ids))
+        await db.execute(f"UPDATE events SET {col_name} = 1 WHERE id IN ({placeholders})", tuple(event_ids))
+        await db.commit()
+
 async def delete_obsolete_events(active_links):
     """
     Deletes events from the database that are not in the provided list of active links
