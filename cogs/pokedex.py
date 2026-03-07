@@ -184,17 +184,47 @@ class PokedexView(discord.ui.View):
         self.costumes = costumes
         self.default_image_url = default_image_url
 
-        # Create select menu
-        options = [discord.SelectOption(label="Standard (Bez kostýmu)", value="default")]
-        for i, c in enumerate(costumes[:24]): # max 25 options
-            options.append(discord.SelectOption(label=c['name'], value=str(i)))
+        chunk_size = 24
+        max_chunks = 5
+        chunks = [self.costumes[i:i + chunk_size] for i in range(0, len(self.costumes), chunk_size)][:max_chunks]
 
-        select = discord.ui.Select(placeholder="Zobrazit kostým...", options=options)
-        select.callback = self.select_callback
-        self.add_item(select)
+        for index, chunk in enumerate(chunks):
+            options = []
+            if index == 0:
+                options.append(discord.SelectOption(label="Standard (Bez kostýmu)", value="default"))
+
+            # Calculate the global offset for this chunk
+            offset = index * chunk_size
+            for i, c in enumerate(chunk):
+                global_index = offset + i
+                options.append(discord.SelectOption(label=c['name'], value=str(global_index)))
+
+            placeholder = "🎭 Zobrazit kostým..."
+            if len(chunks) > 1:
+                first_label = chunk[0]['name']
+                last_label = chunk[-1]['name']
+                placeholder = f"🎭 Zobrazit kostým ({first_label} - {last_label})"
+
+            select = discord.ui.Select(
+                custom_id=f"select_costume_{index}",
+                placeholder=placeholder,
+                min_values=0 if len(chunks) > 1 else 1,
+                max_values=1,
+                options=options
+            )
+            select.callback = self.select_callback
+            self.add_item(select)
 
     async def select_callback(self, interaction: discord.Interaction):
-        select = self.children[0]
+        # Find which select component triggered this
+        triggered_custom_id = interaction.data['custom_id']
+        select = [item for item in self.children if isinstance(item, discord.ui.Select) and getattr(item, 'custom_id', None) == triggered_custom_id][0]
+
+        if not select.values:
+            # Deselected, just re-render to enforce the previous valid selection visually
+            await interaction.response.edit_message(embed=self.embed, view=self)
+            return
+
         selected = select.values[0]
 
         if selected == "default":
