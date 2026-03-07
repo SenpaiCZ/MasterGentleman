@@ -131,8 +131,8 @@ class Admin(commands.Cog):
 
             # 3. git pull
             await msg.edit(content="Updating bot from repository...")
-            process = await asyncio.create_subprocess_shell(
-                "git pull",
+            process = await asyncio.create_subprocess_exec(
+                "git", "pull",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -146,8 +146,8 @@ class Admin(commands.Cog):
             await msg.edit(content=f"Git pull successful. Installing dependencies...")
 
             # 4. pip install
-            process = await asyncio.create_subprocess_shell(
-                f'"{sys.executable}" -m pip install -r requirements.txt',
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "pip", "install", "-r", "requirements.txt",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -183,8 +183,8 @@ class Admin(commands.Cog):
         try:
             # 1. Revert Git to previous state
             await msg.edit(content="Reverting git to previous commit...")
-            process = await asyncio.create_subprocess_shell(
-                "git reset --hard HEAD@{1}",
+            process = await asyncio.create_subprocess_exec(
+                "git", "reset", "--hard", "HEAD@{1}",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -213,8 +213,8 @@ class Admin(commands.Cog):
                 await msg.edit(content="Warning: No local database backup found to restore. Installing dependencies...")
 
             # 3. Re-install dependencies
-            process = await asyncio.create_subprocess_shell(
-                f'"{sys.executable}" -m pip install -r requirements.txt',
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "pip", "install", "-r", "requirements.txt",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
