@@ -1,5 +1,4 @@
 import aiosqlite
-import os
 import logging
 import asyncio
 

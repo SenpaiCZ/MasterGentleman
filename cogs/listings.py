@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-from discord import app_commands, ui
+from discord import app_commands
 import database
 import services.matcher as matcher
 import views.trade
