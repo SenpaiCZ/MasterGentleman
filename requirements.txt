@@ -5,3 +5,5 @@ qrcode[pil]
 beautifulsoup4
 pytz
 aiohttp
+pytest
+pytest-asyncio
