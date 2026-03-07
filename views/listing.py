@@ -233,7 +233,7 @@ class ListingDraftView(ui.View):
                 select_variant = ui.Select(
                     custom_id=f"select_variant_{index}",
                     placeholder=placeholder,
-                    min_values=1,
+                    min_values=0 if len(chunks) > 1 else 1,
                     max_values=1,
                     options=options,
                     row=row_offset
@@ -284,7 +284,7 @@ class ListingDraftView(ui.View):
                 select_costume = ui.Select(
                     custom_id=f"select_costume_{index}",
                     placeholder=placeholder,
-                    min_values=1,
+                    min_values=0 if len(chunks) > 1 else 1,
                     max_values=1,
                     options=options,
                     row=current_row
@@ -446,6 +446,11 @@ class ListingDraftView(ui.View):
         triggered_custom_id = interaction.data['custom_id']
         select = [item for item in self.children if isinstance(item, ui.Select) and getattr(item, 'custom_id', None) == triggered_custom_id][0]
 
+        if not select.values:
+            # Deselected, just re-render to enforce the previous valid selection visually
+            await self.update_view(interaction)
+            return
+
         selected_val = int(select.values[0])
 
         # Update species_id and dynamically update image URLs
@@ -466,11 +471,15 @@ class ListingDraftView(ui.View):
         triggered_custom_id = interaction.data['custom_id']
         select = [item for item in self.children if isinstance(item, ui.Select) and getattr(item, 'custom_id', None) == triggered_custom_id][0]
 
-        val = select.values[0]
-        if val == "none":
+        if not select.values:
+            # Deselected a costume menu
             self.selected_costume = None
         else:
-            self.selected_costume = val
+            val = select.values[0]
+            if val == "none":
+                self.selected_costume = None
+            else:
+                self.selected_costume = val
 
         await self.update_view(interaction)
 
