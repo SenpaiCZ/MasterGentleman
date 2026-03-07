@@ -191,15 +191,17 @@ class Events(commands.Cog):
 
         # 2h Warning: [now + 90min, now + 130min]
         events_2h = await database.get_events_for_notification(now_ts + 90*60, now_ts + 130*60, '2h')
-        for event in events_2h:
-            await self._send_notification(event, '2h')
-            await database.mark_event_notified(event['id'], '2h')
+        if events_2h:
+            for event in events_2h:
+                await self._send_notification(event, '2h')
+            await database.mark_events_notified([e['id'] for e in events_2h], '2h')
 
         # 5m Warning: [now + 4min, now + 6min]
         events_5m = await database.get_events_for_notification(now_ts + 4*60, now_ts + 6*60, '5m')
-        for event in events_5m:
-            await self._send_notification(event, '5m')
-            await database.mark_event_notified(event['id'], '5m')
+        if events_5m:
+            for event in events_5m:
+                await self._send_notification(event, '5m')
+            await database.mark_events_notified([e['id'] for e in events_5m], '5m')
 
     async def _send_notification(self, event, notif_type):
         for guild in self.bot.guilds:
@@ -341,8 +343,7 @@ class Events(commands.Cog):
                 logger.error(f"Failed to send morning summary to guild {guild.id}: {e}")
 
         # Mark as notified after sending
-        for ev in events:
-            await database.mark_event_notified(ev['id'], 'morning')
+        await database.mark_events_notified([ev['id'] for ev in events], 'morning')
 
     def translate_day(self, en_day):
         days = {
