@@ -64,5 +64,52 @@ class TestPokedexColors(unittest.TestCase):
         self.assertEqual(self.cog._get_color_by_type("Fire"), 0xEE8130)
         self.assertEqual(self.cog._get_color_by_type("fire"), 0xFFFFFF)
 
+class TestPokedexStatBar(unittest.TestCase):
+    def setUp(self):
+        self.bot = MagicMock()
+        self.cog = Pokedex(self.bot)
+
+    def test_create_stat_bar_half(self):
+        """Test a partially filled stat bar (exactly 50%)."""
+        # value=5, max_val=10, length=10 -> 5 filled, 5 empty
+        result = self.cog._create_stat_bar(5, max_val=10, length=10)
+        self.assertEqual(result, "`█████░░░░░` 5")
+
+    def test_create_stat_bar_full(self):
+        """Test a fully filled stat bar (100%)."""
+        # value=10, max_val=10, length=10 -> 10 filled, 0 empty
+        result = self.cog._create_stat_bar(10, max_val=10, length=10)
+        self.assertEqual(result, "`██████████` 10")
+
+    def test_create_stat_bar_empty(self):
+        """Test an empty stat bar (0%)."""
+        # value=0, max_val=10, length=10 -> 0 filled, 10 empty
+        result = self.cog._create_stat_bar(0, max_val=10, length=10)
+        self.assertEqual(result, "`░░░░░░░░░░` 0")
+
+    def test_create_stat_bar_overfill(self):
+        """Test a stat bar where value exceeds max_val."""
+        # value=15, max_val=10, length=10 -> should clamp to length 10
+        result = self.cog._create_stat_bar(15, max_val=10, length=10)
+        self.assertEqual(result, "`██████████` 15")
+
+    def test_create_stat_bar_underfill(self):
+        """Test a stat bar where value is less than 0."""
+        # value=-5, max_val=10, length=10 -> should clamp to 0
+        result = self.cog._create_stat_bar(-5, max_val=10, length=10)
+        self.assertEqual(result, "`░░░░░░░░░░` -5")
+
+    def test_create_stat_bar_custom_length(self):
+        """Test a stat bar with a custom length."""
+        # value=5, max_val=10, length=5 -> 2.5 filled (int=2), 3 empty
+        result = self.cog._create_stat_bar(5, max_val=10, length=5)
+        self.assertEqual(result, "`██░░░` 5")
+
+    def test_create_stat_bar_zero_max_val(self):
+        """Test that max_val=0 raises a ZeroDivisionError."""
+        with self.assertRaises(ZeroDivisionError):
+            self.cog._create_stat_bar(5, max_val=0, length=10)
+
+
 if __name__ == "__main__":
     unittest.main()
