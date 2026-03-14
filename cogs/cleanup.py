@@ -104,7 +104,7 @@ class Cleanup(commands.Cog):
 
                                 if channel and channel.guild.id == guild_id:
                                     should_delete = True
-                            except:
+                            except discord.HTTPException:
                                 # Can't confirm guild
                                 pass
 

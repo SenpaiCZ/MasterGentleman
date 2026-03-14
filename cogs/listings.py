@@ -321,7 +321,7 @@ class Listings(commands.Cog):
                     if target_channel != interaction.channel and interaction.channel:
                          try:
                             sent_message = await interaction.channel.send(content=interaction.user.mention, embed=embed)
-                         except: pass
+                         except discord.HTTPException: pass
 
             if sent_message:
                 await database.update_listing_message(listing_id, sent_message.id, sent_message.channel.id)
@@ -336,7 +336,7 @@ class Listings(commands.Cog):
                             if ch:
                                 msg = await ch.fetch_message(old_l['message_id'])
                                 await msg.delete()
-                        except: pass
+                        except discord.HTTPException: pass
                     await database.delete_listing(old_listing_id)
 
             if not interaction.response.is_done():
@@ -484,7 +484,7 @@ class Listings(commands.Cog):
                 if channel:
                     msg = await channel.fetch_message(listing['message_id'])
                     await msg.delete()
-            except: pass
+            except discord.HTTPException: pass
 
         await database.delete_listing(listing_id)
 
@@ -512,7 +512,7 @@ class Listings(commands.Cog):
                     msg = await channel.fetch_message(listing['message_id'])
                     embed = self._create_single_listing_embed(listing)
                     await msg.edit(embed=embed)
-            except: pass
+            except discord.HTTPException: pass
 
         # Refresh
         all_listings = await database.get_user_listings(interaction.user.id)

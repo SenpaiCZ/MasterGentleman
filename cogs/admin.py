@@ -306,7 +306,7 @@ class Admin(commands.Cog):
                     # Batch update
                     if current % 100 == 0 or current == total:
                          await msg.edit(content=f"Scraping... {current}/{total}")
-            except:
+            except discord.HTTPException:
                 pass
 
         try:

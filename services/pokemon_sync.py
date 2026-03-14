@@ -576,7 +576,7 @@ def parse_images(soup):
                 end = src.find('&', start)
                 if end == -1: end = len(src)
                 return unquote(src[start:end])
-            except:
+            except Exception:
                 return src
         return src
 
@@ -725,7 +725,7 @@ def parse_costumes(soup):
                     end = src.find('&', start)
                     if end == -1: end = len(src)
                     return unquote(src[start:end])
-                except:
+                except Exception:
                     return src
             return src
 
