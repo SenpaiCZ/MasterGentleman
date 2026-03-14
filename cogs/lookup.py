@@ -104,7 +104,7 @@ class Lookup(commands.Cog):
                 if member:
                     embed.set_thumbnail(url=member.display_avatar.url)
                     embed.set_footer(text=f"Discord: {member.display_name}")
-        except:
+        except discord.HTTPException:
             pass
 
         await interaction.followup.send(embed=embed, ephemeral=True)

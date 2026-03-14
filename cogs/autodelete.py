@@ -113,7 +113,7 @@ class AutoDelete(commands.Cog):
                     # Just skip if not in cache or try fetch once.
                     try:
                         channel = await self.bot.fetch_channel(channel_id)
-                    except:
+                    except discord.HTTPException:
                         # Channel deleted or no access
                         # Optionally delete config?
                         continue

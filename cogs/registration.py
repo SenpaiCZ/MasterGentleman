@@ -195,7 +195,7 @@ class EventNotificationView(ui.View):
         try:
             if enable:
                 await interaction.user.add_roles(role, reason="Registration: Accepted Event Alerts")
-        except:
+        except discord.HTTPException:
             pass
 
 class RegionSelect(ui.Select):
