@@ -563,6 +563,25 @@ async def get_user_listings(user_id, status='ACTIVE'):
         async with db.execute(sql, (user_id, status)) as cursor:
             return await cursor.fetchall()
 
+async def get_user_listings_batch(user_ids, status='ACTIVE'):
+    """Fetches all listings for multiple users in a single query."""
+    if not user_ids:
+        return []
+    async with get_db() as db:
+        placeholders = ', '.join(['?'] * len(user_ids))
+        sql = f"""
+            SELECT l.*, u.account_name,
+                   p.name as pokemon_name, p.form as pokemon_form, p.pokedex_num as pokemon_id, p.image_url, p.shiny_image_url, p.costumes as costumes_json
+            FROM listings l
+            JOIN users u ON l.account_id = u.id
+            JOIN pokemon_species p ON l.species_id = p.id
+            WHERE l.user_id IN ({placeholders}) AND l.status = ?
+            ORDER BY p.pokedex_num ASC, p.form ASC, l.is_shiny DESC, l.created_at DESC
+        """
+        params = list(user_ids) + [status]
+        async with db.execute(sql, tuple(params)) as cursor:
+            return await cursor.fetchall()
+
 async def get_account_listings(account_id, status='ACTIVE'):
     async with get_db() as db:
         sql = """
@@ -585,6 +604,15 @@ async def update_listing_status(listing_id, status):
 async def delete_listing(listing_id):
     async with get_db() as db:
         await db.execute("DELETE FROM listings WHERE id = ?", (listing_id,))
+        await db.commit()
+
+async def delete_listings_batch(listing_ids):
+    """Deletes multiple listings in a single batch query."""
+    if not listing_ids:
+        return
+    async with get_db() as db:
+        placeholders = ', '.join(['?'] * len(listing_ids))
+        await db.execute(f"DELETE FROM listings WHERE id IN ({placeholders})", tuple(listing_ids))
         await db.commit()
 
 # --- Trades ---
@@ -821,6 +849,15 @@ async def add_user_departure(user_id, guild_id):
 async def remove_user_departure(user_id):
     async with get_db() as db:
         await db.execute("DELETE FROM user_departures WHERE user_id = ?", (user_id,))
+        await db.commit()
+
+async def remove_user_departures_batch(user_ids):
+    """Removes multiple users from the departures table in a single query."""
+    if not user_ids:
+        return
+    async with get_db() as db:
+        placeholders = ', '.join(['?'] * len(user_ids))
+        await db.execute(f"DELETE FROM user_departures WHERE user_id IN ({placeholders})", tuple(user_ids))
         await db.commit()
 
 async def get_departed_users(hours=24):
