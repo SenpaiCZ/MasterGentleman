@@ -79,59 +79,75 @@ class Cleanup(commands.Cog):
 
             logger.info(f"Found {len(departed_users)} users who left > 24h ago.")
 
+            user_ids = list(set(dep['user_id'] for dep in departed_users))
+
+            # Fetch all listings for all these users in one batch
+            all_listings = await database.get_user_listings_batch(user_ids)
+
+            # Group listings by user_id
+            user_listings_map = {}
+            for listing in all_listings:
+                uid = listing['user_id']
+                if uid not in user_listings_map:
+                    user_listings_map[uid] = []
+                user_listings_map[uid].append(listing)
+
+            listings_to_delete = []
+
             for dep in departed_users:
                 user_id = dep['user_id']
                 guild_id = dep['guild_id']
+                listings = user_listings_map.get(user_id, [])
 
-                # Fetch all listings for this user
-                listings = await database.get_user_listings(user_id)
+                for listing in listings:
+                    should_delete = False
 
-                if listings:
-                    for listing in listings:
-                        should_delete = False
+                    # Check Guild ID in DB (if populated)
+                    if listing['guild_id'] is not None:
+                        if listing['guild_id'] == guild_id:
+                            should_delete = True
 
-                        # Check Guild ID in DB (if populated)
-                        if listing['guild_id'] is not None:
-                            if listing['guild_id'] == guild_id:
+                    # Fallback: Check Channel Guild
+                    elif listing['channel_id']:
+                        try:
+                            channel = self.bot.get_channel(listing['channel_id'])
+                            if not channel:
+                                channel = await self.bot.fetch_channel(listing['channel_id'])
+
+                            if channel and channel.guild.id == guild_id:
                                 should_delete = True
+                        except discord.HTTPException:
+                            # Can't confirm guild
+                            pass
 
-                        # Fallback: Check Channel Guild
-                        elif listing['channel_id']:
-                            try:
-                                channel = self.bot.get_channel(listing['channel_id'])
-                                if not channel:
-                                    channel = await self.bot.fetch_channel(listing['channel_id'])
+                    if should_delete:
+                        try:
+                            # Delete Discord Message
+                            if listing['channel_id'] and listing['message_id']:
+                                try:
+                                    channel = self.bot.get_channel(listing['channel_id'])
+                                    if not channel:
+                                        channel = await self.bot.fetch_channel(listing['channel_id'])
+                                    if channel:
+                                        msg = await channel.fetch_message(listing['message_id'])
+                                        await msg.delete()
+                                except Exception:
+                                    pass # Ignore errors
 
-                                if channel and channel.guild.id == guild_id:
-                                    should_delete = True
-                            except discord.HTTPException:
-                                # Can't confirm guild
-                                pass
+                            listings_to_delete.append(listing['id'])
+                            logger.info(f"Deleted listing {listing['id']} for departed user {user_id}")
 
-                        if should_delete:
-                            try:
-                                # Delete Discord Message
-                                if listing['channel_id'] and listing['message_id']:
-                                    try:
-                                        channel = self.bot.get_channel(listing['channel_id'])
-                                        if not channel:
-                                            channel = await self.bot.fetch_channel(listing['channel_id'])
-                                        if channel:
-                                            msg = await channel.fetch_message(listing['message_id'])
-                                            await msg.delete()
-                                    except Exception as e:
-                                        pass # Ignore errors
+                        except Exception as e:
+                            logger.error(f"Error cleaning up listing {listing['id']} for departed user {user_id}: {e}")
 
-                                # Delete Listing from DB
-                                await database.delete_listing(listing['id'])
-                                logger.info(f"Deleted listing {listing['id']} for departed user {user_id}")
+            # Batch delete listings from DB
+            if listings_to_delete:
+                await database.delete_listings_batch(listings_to_delete)
+                logger.info(f"Batch deleted {len(listings_to_delete)} listings.")
 
-                            except Exception as e:
-                                logger.error(f"Error deleting listing {listing['id']} for departed user {user_id}: {e}")
-
-                # Remove from departure table
-                await database.remove_user_departure(user_id)
-                logger.info(f"Cleaned up for departed user {user_id}.")
+            # Batch remove from departure table
+            await database.remove_user_departures_batch(user_ids)
+            logger.info(f"Cleaned up for {len(user_ids)} departed users.")
 
         except Exception as e:
             logger.error(f"Error in cleanup_departed_users_task: {e}")
