@@ -84,6 +84,7 @@ class ListingDraftView(ui.View):
         self.is_background = False
         self.is_adventure_effect = False
         self.is_mirror = False
+        self.gender = None
         self.details = initial_details
         self.count = 1
         self.selected_costume = None
@@ -318,6 +319,25 @@ class ListingDraftView(ui.View):
             self.add_item(select_account)
             row_offset += 1
 
+        # Gender Select
+        gender_options = [
+            discord.SelectOption(label="Jakékoliv", value="none", emoji="⚖️", default=(self.gender is None)),
+            discord.SelectOption(label="Samec (Male)", value="Male", emoji="♂️", default=(self.gender == "Male")),
+            discord.SelectOption(label="Samice (Female)", value="Female", emoji="♀️", default=(self.gender == "Female"))
+        ]
+        current_row = row_offset if row_offset <= 4 else 4
+        select_gender = ui.Select(
+            custom_id="select_gender",
+            placeholder="♂️/♀️ Vybrat pohlaví (volitelné)",
+            min_values=1,
+            max_values=1,
+            options=gender_options,
+            row=current_row
+        )
+        select_gender.callback = self.select_gender
+        self.add_item(select_gender)
+        row_offset += 1
+
 
 
     def _get_embed(self):
@@ -339,6 +359,10 @@ class ListingDraftView(ui.View):
 
         if status_parts:
             desc += f"**Stav:** {' | '.join(status_parts)}\n"
+
+        if self.gender:
+            gender_label = "Samec (Male) ♂️" if self.gender == "Male" else "Samice (Female) ♀️"
+            desc += f"**Pohlaví:** {gender_label}\n"
 
         if self.selected_costume:
             desc += f"**Kostým:** {self.selected_costume}\n"
@@ -496,6 +520,15 @@ class ListingDraftView(ui.View):
 
         await self.update_view(interaction)
 
+    async def select_gender(self, interaction: discord.Interaction):
+        select = [item for item in self.children if getattr(item, 'custom_id', None) == 'select_gender'][0]
+        val = select.values[0]
+        if val == "none":
+            self.gender = None
+        else:
+            self.gender = val
+        await self.update_view(interaction)
+
     async def publish(self, interaction: discord.Interaction):
         # Disable buttons
         for child in self.children:
@@ -517,6 +550,7 @@ class ListingDraftView(ui.View):
                 self.is_background,
                 self.is_adventure_effect,
                 self.is_mirror,
+                self.gender,
                 self.details,
                 self.count,
                 self.selected_costume

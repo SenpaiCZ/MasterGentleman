@@ -14,6 +14,7 @@ class Config(commands.Cog):
     events_group = app_commands.Group(name="udalosti", description="Nastavení upozornění na Pokémon GO eventy", parent=setup_group)
     trade_group = app_commands.Group(name="trade", description="Nastavení obchodů", parent=setup_group)
     suggestions_group = app_commands.Group(name="navrhy", description="Nastavení systému návrhů", parent=setup_group)
+    promo_group = app_commands.Group(name="promo", description="Nastavení promo kódů", parent=setup_group)
 
     @setup_group.command(name="nabidka", description="Nastavit kanál pro nové nabídky (HAVE)")
     @app_commands.describe(channel="Textový kanál pro nabídky")
@@ -81,6 +82,15 @@ class Config(commands.Cog):
             ephemeral=True
         )
 
+    # --- Promo Subgroup ---
+
+    @promo_group.command(name="kanal", description="Nastavit kanál pro upozornění na promo kódy")
+    @app_commands.describe(channel="Textový kanál pro promo kódy")
+    @commands.has_permissions(administrator=True)
+    async def set_promo_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        await database.set_guild_config(interaction.guild_id, promo_channel_id=channel.id)
+        await interaction.response.send_message(f"✅ Kanál pro **Promo kódy** byl nastaven na: {channel.mention}", ephemeral=True)
+
     @events_group.command(name="stav", description="Zobrazit aktuální nastavení")
     @commands.has_permissions(administrator=True)
     async def status(self, interaction: discord.Interaction):
@@ -94,6 +104,7 @@ class Config(commands.Cog):
         trade_cat = "Nenastaveno"
         sugg_ch = "Nenastaveno"
         emojis = "Nenastaveno"
+        promo_ch = "Nenastaveno"
 
         if config:
             if config['event_channel_id']:
@@ -129,6 +140,11 @@ class Config(commands.Cog):
             if config.get('upvote_emoji') and config.get('downvote_emoji'):
                 emojis = f"{config['upvote_emoji']} / {config['downvote_emoji']}"
 
+            if config.get('promo_channel_id'):
+                ch = interaction.guild.get_channel(config['promo_channel_id'])
+                if ch: promo_ch = ch.mention
+                else: promo_ch = f"Invalid ID ({config['promo_channel_id']})"
+
         msg = (
             f"**⚙️ Nastavení Bota:**\n\n"
             f"**📅 Udalosti (Events):**\n"
@@ -140,7 +156,9 @@ class Config(commands.Cog):
             f"📂 Kategorie: {trade_cat}\n\n"
             f"**💡 Návrhy:**\n"
             f"📢 Kanál: {sugg_ch}\n"
-            f"🗳️ Emojis: {emojis}"
+            f"🗳️ Emojis: {emojis}\n\n"
+            f"**🎟️ Promo Kódy:**\n"
+            f"📢 Kanál: {promo_ch}"
         )
         await interaction.response.send_message(msg, ephemeral=True)
 

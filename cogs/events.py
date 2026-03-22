@@ -185,23 +185,43 @@ class Events(commands.Cog):
         logger.info(f"Database updated with {count} events.")
         return count
 
-    @tasks.loop(minutes=1)
+    @tasks.loop(seconds=30)
     async def notification_task(self):
+        """
+        Refactored notification task for high precision.
+        Checks for 2h, 5m and START notifications.
+        """
         now_ts = datetime.datetime.now(datetime.timezone.utc).timestamp()
+        
+        # 1. Start Notification (Exactly at start_time)
+        # Look for events starting in the next 45 seconds that haven't been notified
+        async with database.get_db() as db:
+            sql = "SELECT * FROM events WHERE start_time BETWEEN ? AND ? AND start_notif_sent = 0"
+            async with db.execute(sql, (now_ts - 60, now_ts + 45)) as cursor:
+                events_start = await cursor.fetchall()
 
-        # 2h Warning: [now + 90min, now + 130min]
-        events_2h = await database.get_events_for_notification(now_ts + 90*60, now_ts + 130*60, '2h')
-        if events_2h:
-            for event in events_2h:
-                await self._send_notification(event, '2h')
-            await database.mark_events_notified([e['id'] for e in events_2h], '2h')
+        for event in events_start:
+            delay = event['start_time'] - datetime.datetime.now(datetime.timezone.utc).timestamp()
+            if delay > 0:
+                # Precise sleep until the exact start second
+                await asyncio.sleep(delay)
+            
+            await self._send_notification(event, 'start')
+            await database.update_event_start_notified(event['id'])
 
-        # 5m Warning: [now + 4min, now + 6min]
+        # 2. 5m Warning
         events_5m = await database.get_events_for_notification(now_ts + 4*60, now_ts + 6*60, '5m')
+        for event in events_5m:
+            await self._send_notification(event, '5m')
         if events_5m:
-            for event in events_5m:
-                await self._send_notification(event, '5m')
             await database.mark_events_notified([e['id'] for e in events_5m], '5m')
+
+        # 3. 2h Warning
+        events_2h = await database.get_events_for_notification(now_ts + 119*60, now_ts + 121*60, '2h')
+        for event in events_2h:
+            await self._send_notification(event, '2h')
+        if events_2h:
+            await database.mark_events_notified([e['id'] for e in events_2h], '2h')
 
     async def _send_notification(self, event, notif_type):
         for guild in self.bot.guilds:
@@ -216,24 +236,29 @@ class Events(commands.Cog):
             role = guild.get_role(config['event_role_id']) if config['event_role_id'] else None
             role_mention = role.mention if role else ""
 
-            time_str = "2 hodiny" if notif_type == '2h' else "5 minut"
-            title_prefix = "⏰ Začíná za"
+            color = discord.Color.blue()
+            msg_suffix = "právě začíná!"
+            if notif_type == '2h':
+                color = discord.Color.orange()
+                msg_suffix = "začíná za 2 hodiny!"
+            elif notif_type == '5m':
+                color = discord.Color.red()
+                msg_suffix = "začíná za 5 minut!"
 
             discord_ts = f"<t:{int(event['start_time'])}:R>"
             time_text = event.get('time_text') or "TBA"
             event_type = event.get('type') or "Event"
 
             embed = discord.Embed(
-                title=f"⏰ Upozornění na událost: {event['name']}",
+                title=f"⏰ Událost: {event['name']}",
                 description=f"**Začátek:** {discord_ts}\n**Čas:** {time_text}\n**Typ:** {event_type}",
-                color=discord.Color.orange() if notif_type == '2h' else discord.Color.red(),
+                color=color,
                 url=event.get('link') or ""
             )
 
             if event['image_url']:
                 embed.set_thumbnail(url=event['image_url'])
 
-            msg_suffix = "začíná za 2 hodiny!" if notif_type == '2h' else "začíná za 5 minut!"
             content = f"{role_mention} Událost {msg_suffix}"
 
             try:

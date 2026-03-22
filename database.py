@@ -188,6 +188,7 @@ async def init_db():
                     is_background BOOLEAN DEFAULT 0,
                     is_adventure_effect BOOLEAN DEFAULT 0,
                     is_mirror BOOLEAN DEFAULT 0,
+                    gender TEXT,
                     details TEXT,
                     costume TEXT,
                     status TEXT DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE', 'PENDING', 'COMPLETED', 'CANCELLED')),
@@ -212,6 +213,10 @@ async def init_db():
             if 'costume' not in columns:
                 logger.info("Adding missing column costume to listings table.")
                 await db.execute("ALTER TABLE listings ADD COLUMN costume TEXT")
+
+            if 'gender' not in columns:
+                logger.info("Adding missing column gender to listings table.")
+                await db.execute("ALTER TABLE listings ADD COLUMN gender TEXT")
 
             # 4. Trades
             await db.execute("""
@@ -241,6 +246,7 @@ async def init_db():
                     notified_morning BOOLEAN DEFAULT 0,
                     notified_2h BOOLEAN DEFAULT 0,
                     notified_5m BOOLEAN DEFAULT 0,
+                    start_notif_sent BOOLEAN DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(link)
                 )
@@ -254,14 +260,15 @@ async def init_db():
             new_event_columns = {
                 'type': "TEXT DEFAULT 'Event'",
                 'time_text': "TEXT",
-                'notified_morning': "BOOLEAN DEFAULT 0"
+                'notified_morning': "BOOLEAN DEFAULT 0",
+                'start_notif_sent': "BOOLEAN DEFAULT 0"
             }
             for col, col_type in new_event_columns.items():
                 if col not in columns:
                     logger.info(f"Adding missing column {col} to events table.")
                     await db.execute(f"ALTER TABLE events ADD COLUMN {col} {col_type}")
 
-            # 6. Guild Config
+            # 6. Guild Configs
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS guild_config (
                     guild_id INTEGER PRIMARY KEY,
@@ -271,10 +278,30 @@ async def init_db():
                     want_channel_id INTEGER,
                     trade_category_id INTEGER,
                     suggestion_channel_id INTEGER,
-                    upvote_emoji TEXT,
-                    downvote_emoji TEXT
+                    promo_channel_id INTEGER,
+                    upvote_emoji TEXT DEFAULT '👍',
+                    downvote_emoji TEXT DEFAULT '👎'
                 )
             """)
+
+            # Check for missing columns in guild_config
+            async with db.execute("PRAGMA table_info(guild_config)") as cursor:
+                columns = [row['name'] for row in await cursor.fetchall()]
+
+            if 'promo_channel_id' not in columns:
+                logger.info("Adding missing column promo_channel_id to guild_config table.")
+                await db.execute("ALTER TABLE guild_config ADD COLUMN promo_channel_id INTEGER")
+
+            # 7. Promo Codes (New Table)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS promo_codes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT UNIQUE NOT NULL,
+                    description TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
 
             # Check for missing columns in guild_config
             async with db.execute("PRAGMA table_info(guild_config)") as cursor:
@@ -497,6 +524,7 @@ async def add_listing(user_id, account_id, listing_type, species_id,
                      is_dynamax=False, is_gigantamax=False,
                      is_background=False, is_adventure_effect=False,
                      is_mirror=False,
+                     gender=None,
                      details=None,
                      costume=None,
                      guild_id=None,
@@ -506,14 +534,14 @@ async def add_listing(user_id, account_id, listing_type, species_id,
             INSERT INTO listings (
                 user_id, account_id, listing_type, species_id,
                 is_shiny, is_purified, is_dynamax, is_gigantamax,
-                is_background, is_adventure_effect, is_mirror, details,
+                is_background, is_adventure_effect, is_mirror, gender, details,
                 costume, guild_id, count
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             user_id, account_id, listing_type, species_id,
             is_shiny, is_purified, is_dynamax, is_gigantamax,
-            is_background, is_adventure_effect, is_mirror, details,
+            is_background, is_adventure_effect, is_mirror, gender, details,
             costume, guild_id, count
         ))
         await db.commit()
@@ -662,12 +690,14 @@ async def find_candidates(listing_type, species_id,
                           is_dynamax, is_gigantamax,
                           is_background, is_adventure_effect,
                           is_mirror,
+                          gender,
                           costume,
                           exclude_user_id):
     """
     Finds all ACTIVE listings that match the criteria.
     Now uses species_id.
     Matches costume exactly OR if either costume is NULL/Jakýkoliv.
+    Matches gender exactly OR if either gender is NULL/Jakýkoliv.
     """
     async with get_db() as db:
         sql = """
@@ -685,6 +715,7 @@ async def find_candidates(listing_type, species_id,
             AND l.is_background = ?
             AND l.is_adventure_effect = ?
             AND l.is_mirror = ?
+            AND (l.gender IS NULL OR ? IS NULL OR l.gender = ?)
             AND (l.costume IS NULL OR ? IS NULL OR l.costume = ?)
             AND l.user_id != ?
             AND l.status = 'ACTIVE'
@@ -696,6 +727,7 @@ async def find_candidates(listing_type, species_id,
             is_dynamax, is_gigantamax,
             is_background, is_adventure_effect,
             is_mirror,
+            gender, gender,
             costume, costume,
             exclude_user_id
         )) as cursor:
@@ -747,6 +779,11 @@ async def mark_event_notified(event_id, notification_type):
         await db.execute(f"UPDATE events SET {col_name} = 1 WHERE id = ?", (event_id,))
         await db.commit()
 
+async def update_event_start_notified(event_id):
+    async with get_db() as db:
+        await db.execute("UPDATE events SET start_notif_sent = 1 WHERE id = ?", (event_id,))
+        await db.commit()
+
 async def mark_events_notified(event_ids, notification_type):
     """Marks multiple events as notified in a single batch query."""
     if not event_ids:
@@ -761,6 +798,23 @@ async def mark_events_notified(event_ids, notification_type):
         placeholders = ', '.join(['?'] * len(event_ids))
         await db.execute(f"UPDATE events SET {col_name} = 1 WHERE id IN ({placeholders})", tuple(event_ids))
         await db.commit()
+
+# --- Promo Codes ---
+
+async def add_seen_promo_code(code, description):
+    async with get_db() as db:
+        try:
+            await db.execute("INSERT INTO promo_codes (code, description) VALUES (?, ?)", (code, description))
+            await db.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+async def is_promo_code_seen(code):
+    async with get_db() as db:
+        async with db.execute("SELECT 1 FROM promo_codes WHERE code = ?", (code,)) as cursor:
+            row = await cursor.fetchone()
+            return row is not None
 
 async def delete_obsolete_events(active_links):
     """
@@ -786,7 +840,7 @@ async def delete_obsolete_events(active_links):
 # --- Configs ---
 
 async def set_guild_config(guild_id, **kwargs):
-    allowed_fields = {'event_channel_id', 'event_role_id', 'have_channel_id', 'want_channel_id', 'trade_category_id', 'suggestion_channel_id', 'upvote_emoji', 'downvote_emoji'}
+    allowed_fields = {'event_channel_id', 'event_role_id', 'have_channel_id', 'want_channel_id', 'trade_category_id', 'suggestion_channel_id', 'promo_channel_id', 'upvote_emoji', 'downvote_emoji'}
     updates = []
     params = []
 

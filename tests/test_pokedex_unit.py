@@ -1,31 +1,36 @@
 import sys
-from unittest.mock import MagicMock
-
-# Mock dependencies before importing the cog
-mock_discord = MagicMock()
-mock_database = MagicMock()
+from unittest.mock import MagicMock, patch
+import unittest
 
 # Mocking discord.ext.commands.Cog so it doesn't return mocks when called/initialized
 class MockCog:
     def __init__(self, *args, **kwargs):
         pass
 
-mock_discord.ext.commands.Cog = MockCog
-
-sys.modules["discord"] = mock_discord
-sys.modules["discord.app_commands"] = mock_discord.app_commands
-sys.modules["discord.ext"] = mock_discord.ext
-sys.modules["discord.ext.commands"] = mock_discord.ext.commands
-sys.modules["database"] = mock_database
-
-# Now we can import Pokedex
-from cogs.pokedex import Pokedex
-import unittest
-
-class TestPokedexColors(unittest.TestCase):
+# We will use patches inside the test class to avoid global pollution
+class TestPokedexUnit(unittest.TestCase):
     def setUp(self):
+        self.patcher_discord = patch.dict(sys.modules, {
+            "discord": MagicMock(),
+            "discord.app_commands": MagicMock(),
+            "discord.ext": MagicMock(),
+            "discord.ext.commands": MagicMock(),
+        })
+        self.patcher_database = patch.dict(sys.modules, {"database": MagicMock()})
+        
+        self.patcher_discord.start()
+        self.patcher_database.start()
+        
+        import discord.ext.commands
+        discord.ext.commands.Cog = MockCog
+
+        from cogs.pokedex import Pokedex
         self.bot = MagicMock()
         self.cog = Pokedex(self.bot)
+
+    def tearDown(self):
+        self.patcher_discord.stop()
+        self.patcher_database.stop()
 
     def test_get_color_by_type_valid(self):
         """Test that valid Pokemon types return the correct hex color codes."""
@@ -63,11 +68,6 @@ class TestPokedexColors(unittest.TestCase):
         # "Fire" is valid, "fire" is not in the dictionary
         self.assertEqual(self.cog._get_color_by_type("Fire"), 0xEE8130)
         self.assertEqual(self.cog._get_color_by_type("fire"), 0xFFFFFF)
-
-class TestPokedexStatBar(unittest.TestCase):
-    def setUp(self):
-        self.bot = MagicMock()
-        self.cog = Pokedex(self.bot)
 
     def test_create_stat_bar_half(self):
         """Test a partially filled stat bar (exactly 50%)."""

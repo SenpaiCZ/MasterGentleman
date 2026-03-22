@@ -317,6 +317,13 @@ class ImageGenerator:
             if is_mirror:
                 self._draw_badge(draw, "Mirro", (x + CELL_W - 25, y + 55), (192, 192, 192), (0, 0, 0), font_badge)
 
+            # Gender: Middle Left
+            gender = item.get('gender')
+            if gender == 'Male':
+                self._draw_badge(draw, "Male", (x + 25, y + 55), (65, 105, 225), (255, 255, 255), font_badge)
+            elif gender == 'Female':
+                self._draw_badge(draw, "Femal", (x + 25, y + 55), (255, 105, 180), (255, 255, 255), font_badge)
+
             # Purified: Bottom Left
             if is_purified:
                 self._draw_badge(draw, "Purif", (x + 25, y + 95), (255, 255, 255), (0, 0, 0), font_badge)

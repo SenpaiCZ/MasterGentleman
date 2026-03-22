@@ -7,6 +7,7 @@ import logging
 logger = logging.getLogger('discord')
 
 LEEKDUCK_URL = "https://leekduck.com/events/"
+LEEKDUCK_PROMO_URL = "https://leekduck.com/promo-codes/"
 TZ_PRAGUE = pytz.timezone('Europe/Prague')
 
 def parse_iso_time(iso_str, is_local):
@@ -130,4 +131,62 @@ async def scrape_leekduck():
 
     except Exception as e:
         logger.error(f"Error scraping LeekDuck: {e}")
+        return []
+
+async def scrape_promo_codes():
+    """
+    Scrapes LeekDuck promo codes page and returns a list of code dictionaries.
+    Returns: [{'code': str, 'description': str}]
+    """
+    logger.info("Starting LeekDuck promo codes scrape...")
+    codes = []
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(LEEKDUCK_PROMO_URL) as response:
+                if response.status != 200:
+                    logger.error(f"Failed to fetch LeekDuck Promo: {response.status}")
+                    return []
+                html = await response.text()
+
+        soup = BeautifulSoup(html, 'html.parser')
+
+        # Promo codes are usually in .promo-card
+        promo_cards = soup.select('.promo-card')
+
+        for card in promo_cards:
+            try:
+                # Check if it's active
+                if "expired" in card.get('class', []):
+                    continue
+
+                code_elem = card.select_one('.code-display')
+                if not code_elem:
+                    continue
+
+                code = code_elem.text.strip()
+
+                desc_elem = card.select_one('p') # Descriptions are often in p tags inside
+                description = desc_elem.text.strip() if desc_elem else "No description"
+
+                # Try to get reward image
+                img_elem = card.select_one('img')
+                image_url = img_elem.get('src') if img_elem else None
+                if image_url and image_url.startswith('/'):
+                    image_url = "https://leekduck.com" + image_url
+
+                codes.append({
+                    'code': code,
+                    'description': description,
+                    'image_url': image_url
+                })
+            except Exception as e:
+                logger.error(f"Error parsing promo card: {e}")
+                continue
+
+        logger.info(f"Scraped {len(codes)} promo codes from LeekDuck.")
+        return codes
+
+    except Exception as e:
+        logger.error(f"Error scraping LeekDuck Promo: {e}")
         return []

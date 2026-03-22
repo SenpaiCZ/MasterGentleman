@@ -34,6 +34,8 @@ class Listings(commands.Cog):
     def _format_attributes(self, l):
         # l can be a dict.
         attrs = []
+        if l.get('gender') == 'Male': attrs.append("♂️")
+        elif l.get('gender') == 'Female': attrs.append("♀️")
         if l.get('costume'): attrs.append(f"🎭 {l.get('costume')}")
         if l.get('is_shiny'): attrs.append("✨")
         if l.get('is_purified'): attrs.append("🕊️")
@@ -257,6 +259,7 @@ class Listings(commands.Cog):
                                    shiny: bool, purified: bool,
                                    dynamax: bool, gigantamax: bool, background: bool, adventure_effect: bool,
                                    is_mirror: bool,
+                                   gender: str,
                                    popis: str,
                                    count: int = 1,
                                    costume: str = None,
@@ -277,6 +280,7 @@ class Listings(commands.Cog):
                 is_background=background,
                 is_adventure_effect=adventure_effect,
                 is_mirror=is_mirror,
+                gender=gender,
                 details=popis,
                 costume=costume,
                 guild_id=interaction.guild_id if interaction.guild else None,
@@ -570,6 +574,7 @@ class Listings(commands.Cog):
         draft_view.is_background = bool(listing['is_background'])
         draft_view.is_adventure_effect = bool(listing['is_adventure_effect'])
         draft_view.is_mirror = bool(listing['is_mirror'])
+        draft_view.gender = listing.get('gender')
         draft_view.count = int(listing.get('count', 1))
         draft_view.selected_costume = listing.get('costume')
 
