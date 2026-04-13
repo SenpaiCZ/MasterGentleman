@@ -1,4 +1,5 @@
 import discord
+import asyncio
 from discord.ext import commands
 from discord import app_commands, ui
 import database
@@ -110,6 +111,23 @@ class Profile(commands.Cog):
     async def show_profile_context(self, interaction: discord.Interaction, member: discord.Member):
         await self._show_profile(interaction, member)
 
+    def _generate_qr_sync(self, fc: str) -> BytesIO:
+        """Helper to generate QR code in a thread."""
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(fc)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+        return buffer
+
     async def generate_qr_context(self, interaction: discord.Interaction, member: discord.Member):
         """Generuje QR kódy pro friend codes uživatele."""
         await interaction.response.defer(ephemeral=True)
@@ -123,26 +141,14 @@ class Profile(commands.Cog):
             files = []
             embed = discord.Embed(title=f"QR Kódy: {member.display_name}", color=discord.Color.blue())
 
-            for acc in accounts:
+            # Generate all QR codes concurrently in threads
+            tasks = [asyncio.to_thread(self._generate_qr_sync, acc['friend_code']) for acc in accounts]
+            buffers = await asyncio.gather(*tasks)
+
+            for acc, buffer in zip(accounts, buffers):
                 fc = acc['friend_code']
                 name = acc['account_name']
                 is_main = "⭐ " if acc['is_main'] else ""
-
-                # Generate QR
-                qr = qrcode.QRCode(
-                    version=1,
-                    error_correction=qrcode.constants.ERROR_CORRECT_L,
-                    box_size=10,
-                    border=4,
-                )
-                qr.add_data(fc)
-                qr.make(fit=True)
-                img = qr.make_image(fill_color="black", back_color="white")
-
-                # Save to buffer
-                buffer = BytesIO()
-                img.save(buffer, format="PNG")
-                buffer.seek(0)
 
                 filename = f"qr_{name}_{fc}.png".replace(" ", "_")
                 file = discord.File(buffer, filename=filename)
